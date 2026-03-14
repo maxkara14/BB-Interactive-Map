@@ -12,7 +12,7 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.).
 2. Put characters INSIDE their current zone.
 3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Ночь | 🌧️ Идет дождь" or "☀️ День | ☕ Спокойно"). Use '|' to separate distinct atmospheric traits.
-4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps).
+4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (Short atmospheric phrase describing WHY, e.g., "Комфортно. Тепло. Аура безопасности" or "Холод, тьма, присутствие врагов").
 5. For EACH zone, list 1-3 "poi" (Points of Interest - items, details, furniture).
 6. For EACH character, provide "mood" (emoji + short state) and "attitude" (how they feel about the user).
 7. "thought" is a 1-sentence current thought of the character.
@@ -30,6 +30,7 @@ Analyze the recent roleplay context and generate a topological schematic of the 
       "name": "Название",
       "summary": "Краткое описание...",
       "threat_level": "safe",
+      "threat_reason": "Комфортно. Мягкий свет, аура спокойствия",
       "poi": ["Деталь 1", "Объект 2"],
       "characters": [
         { 
@@ -78,9 +79,14 @@ Recent chat: """{{lastMessages}}"""
             if (zone.poi && zone.poi.length > 0) {
                 poi = " Объекты: " + zone.poi.join(", ") + ".";
             }
-            if (chars || poi || zone.threat_level !== "safe") {
-                let threat = zone.threat_level === "danger" ? " [ОПАСНОСТЬ!]" : zone.threat_level === "tension" ? " [Напряженная обстановка]" : "";
-                contextStr += `В зоне "${zone.name}" (${zone.position})${threat}: ${zone.summary}${chars}${poi} `;
+            
+            let threatContext = "";
+            if (zone.threat_level === "danger") threatContext = ` [🔴 ОПАСНОСТЬ: ${zone.threat_reason || "Неизвестно"}]`;
+            else if (zone.threat_level === "tension") threatContext = ` [🟠 Напряжение: ${zone.threat_reason || "Подозрительно"}]`;
+            else if (zone.threat_reason) threatContext = ` [🟢 Безопасно: ${zone.threat_reason}]`;
+
+            if (chars || poi || zone.threat_level !== "safe" || zone.threat_reason) {
+                contextStr += `В зоне "${zone.name}" (${zone.position})${threatContext}: ${zone.summary}${chars}${poi} `;
             }
         });
         contextStr += `]`;
@@ -155,7 +161,6 @@ Recent chat: """{{lastMessages}}"""
                 console.error("[BB Map] Ошибка очистки API:", e);
             }
             
-            // 100% Визуальный отклик и Уведомление
             // @ts-ignore
             toastr.success('Память радара успешно стерта!', 'BB Map Terminal');
 
@@ -193,6 +198,9 @@ Recent chat: """{{lastMessages}}"""
         const allowedPositions = ['center', 'north', 'south', 'east', 'west', 'northwest', 'northeast', 'southwest', 'southeast'];
         const telemetryData = []; 
 
+        // Берем имя пользователя прямо из мозгов SillyTavern
+        const userName = SillyTavern.getContext().name1 || "";
+
         (data.zones || []).forEach(zone => {
             if (!allowedPositions.includes(zone.position)) return;
 
@@ -201,18 +209,34 @@ Recent chat: """{{lastMessages}}"""
                 const safeName = escapeHtml(char.name);
                 const charInfo = `<b>👤 ${safeName}</b><br/>🎭 <b>Состояние:</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || '😐 Спокоен')}</span><br/>🤝 <b>Отношение:</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || 'Нейтральное')}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
                 const dataIndex = telemetryData.push(charInfo) - 1;
-                charsHtml += `<div class="bb-char-badge interactable-node" data-id="${dataIndex}">${safeName.charAt(0)}</div>`;
+                
+                // Проверяем: это ты или NPC? (сравниваем имена без учета регистра)
+                const isUser = userName && safeName.toLowerCase().includes(userName.toLowerCase());
+                const userClass = isUser ? " user-char" : "";
+                
+                charsHtml += `<div class="bb-char-badge interactable-node${userClass}" data-id="${dataIndex}">${safeName.charAt(0)}</div>`;
             });
 
             const safeZoneName = escapeHtml(zone.name);
             const threatClass = zone.threat_level ? `threat-${zone.threat_level}` : 'threat-safe';
             
+            let threatIcon = '🟢';
+            if (zone.threat_level === 'danger') threatIcon = '🔴';
+            if (zone.threat_level === 'tension') threatIcon = '🟠';
+
+            let reasonHtml = '';
+            if (zone.threat_reason) {
+                reasonHtml = `<br/><br/>${threatIcon} <b>Обстановка:</b> <span style="color:#cbd5e1;">${escapeHtml(zone.threat_reason)}</span>`;
+            }
+            
             let poiHtml = '';
             if (zone.poi && Array.isArray(zone.poi) && zone.poi.length > 0) {
-                poiHtml = `<br/><br/><b style="color:#5bc0be;">🔍 Объекты:</b><br/>` + zone.poi.map(p => `• <span style="color:#cbd5e1;">${escapeHtml(p)}</span>`).join('<br/>');
+                // Если reasonHtml пустой, добавляем отступы здесь, иначе просто перенос
+                const spacer = reasonHtml ? '<br/>' : '<br/><br/>';
+                poiHtml = `${spacer}<b style="color:#5bc0be;">🔍 Объекты:</b><br/>` + zone.poi.map(p => `• <span style="color:#cbd5e1;">${escapeHtml(p)}</span>`).join('<br/>');
             }
 
-            const zoneInfo = `<b>📍 ${safeZoneName}</b><br/><small style="color:#94a3b8;">${escapeHtml(zone.summary)}</small>${poiHtml}`;
+            const zoneInfo = `<b>📍 ${safeZoneName}</b><br/><small style="color:#94a3b8;">${escapeHtml(zone.summary)}</small>${reasonHtml}${poiHtml}`;
             const dataIndex = telemetryData.push(zoneInfo) - 1;
             
             gridHtml += `
@@ -298,7 +322,6 @@ Recent chat: """{{lastMessages}}"""
                 console.error("[BB Map] Ошибка сохранения API:", e);
             }
             
-            // 100% Визуальный отклик и Уведомление
             // @ts-ignore
             toastr.success('Данные карты успешно загружены в радар ИИ!', 'BB Map Memory');
 
@@ -364,7 +387,7 @@ Recent chat: """{{lastMessages}}"""
                 <div class="inline-drawer-content" style="padding: 10px;">
                     <label class="checkbox_label">
                         <input type="checkbox" id="bb_map_enable_toggle" checked>
-                        <span>Показывать кнопку "Интерактивная карта" в меню магии</span>
+                        <span>Показывать кнопку "Интерактивная карта" в меню Расширения</span>
                     </label>
                     <small style="display:block; margin-top:5px; color:#94a3b8;">
                         Эта настройка включает или отключает доступ к терминалу радара.
@@ -389,7 +412,7 @@ Recent chat: """{{lastMessages}}"""
             <div id="bb-map-menu-container" class="extension_container interactable" tabindex="0">
                 <div id="bb-map-menu-item" class="list-group-item flex-container flexGap5 interactable" tabindex="0">
                     <div class="fa-fw fa-solid fa-satellite-dish extensionsMenuExtensionButton" style="color: #5bc0be;"></div>
-                    <span style="color: #e2e8f0;">Терминал Карты (BB)</span>
+                    <span style="color: #e2e8f0;">Интерактивная карта</span>
                 </div>
             </div>
         `);
