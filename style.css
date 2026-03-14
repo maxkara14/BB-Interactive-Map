@@ -1,0 +1,201 @@
+/* === АНИМАЦИИ ПОЯВЛЕНИЯ === */
+@keyframes bootUpModal {
+    0% { transform: scale(0.95); opacity: 0; filter: blur(5px); }
+    100% { transform: scale(1); opacity: 1; filter: blur(0); }
+}
+
+@keyframes popInTags {
+    0% { transform: translateY(-10px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+}
+
+.bb-map-overlay {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(6px);
+    display: flex; justify-content: center; align-items: center;
+    z-index: 99999; opacity: 0; transition: opacity 0.3s ease;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.bb-map-modal {
+    background: rgba(20, 20, 25, 0.85); backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px; padding: 25px; width: 650px; max-width: 95vw;
+    box-shadow: 0 30px 60px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.05);
+    display: flex; flex-direction: column; gap: 15px; max-height: 95vh;
+    animation: bootUpModal 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* === НОВЫЙ ДИЗАЙН ШАПКИ === */
+.bb-map-header-container {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1); padding-bottom: 15px;
+}
+
+.bb-map-title {
+    color: #ffffff; font-size: 18px; font-weight: bold;
+    letter-spacing: 2px; text-transform: uppercase;
+    text-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
+}
+
+.bb-header-tags {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 8px;
+}
+
+.bb-header-tag {
+    background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 4px 12px; border-radius: 20px; font-size: 11px;
+    color: #e2e8f0; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    animation: popInTags 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+}
+
+/* === СЕТКА === */
+.bb-schematic-grid {
+    display: grid; grid-template-areas: "nw n ne" "w c e" "sw s se";
+    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr;
+    gap: 12px; padding: 15px;
+    background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+    background-size: 15px 15px; border-radius: 12px; min-height: 350px;
+}
+
+.zone-center { grid-area: c; border-color: rgba(255, 255, 255, 0.5) !important; background: rgba(255, 255, 255, 0.1) !important;}
+.zone-north { grid-area: n; } .zone-south { grid-area: s; }
+.zone-east { grid-area: e; } .zone-west { grid-area: w; }
+.zone-northwest { grid-area: nw; } .zone-northeast { grid-area: ne; }
+.zone-southwest { grid-area: sw; } .zone-southeast { grid-area: se; }
+
+/* ЗОНЫ И РУЧНИК (LOCK) */
+.bb-zone {
+    border: 1px dashed rgba(255, 255, 255, 0.2); background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px;
+    transition: all 0.2s ease-out; cursor: crosshair; position: relative; min-height: 70px;
+}
+.bb-zone:hover { transform: translateY(-3px); z-index: 10; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
+
+/* Класс для зафиксированной зоны (когда кликнул) */
+.node-locked {
+    border-color: #5bc0be !important; border-style: solid !important;
+    box-shadow: 0 0 15px rgba(91, 192, 190, 0.4) !important; transform: scale(1.05); z-index: 20;
+}
+
+.threat-safe:hover { border-color: rgba(255, 255, 255, 0.7); background: rgba(255, 255, 255, 0.15); }
+.threat-tension { border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.05); }
+.threat-tension:hover { border-color: rgba(245, 158, 11, 0.8); background: rgba(245, 158, 11, 0.15); }
+.threat-danger { border-color: rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.1); animation: dangerPulse 2s infinite; }
+.threat-danger:hover { border-color: rgba(239, 68, 68, 0.9); animation-play-state: paused; background: rgba(239, 68, 68, 0.2); }
+
+@keyframes dangerPulse {
+    0%, 100% { box-shadow: 0 0 5px rgba(239, 68, 68, 0.1); }
+    50% { box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+}
+
+.bb-zone-title {
+    color: #e2e8f0; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15); padding-bottom: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%;
+}
+
+.bb-zone-chars { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+
+.bb-char-badge {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #f59e0b; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    display: flex; justify-content: center; align-items: center;
+    font-size: 12px; font-weight: bold; cursor: pointer;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.4); transition: all 0.2s; border: 1px solid rgba(255,255,255,0.5);
+    animation: beaconPulse 2.5s infinite; 
+}
+.bb-char-badge:hover { transform: scale(1.2); background: #fbbf24; box-shadow: 0 0 15px rgba(251, 191, 36, 0.8); animation-play-state: paused; }
+
+@keyframes beaconPulse {
+    0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+    70% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+/* === ЖЕСТКАЯ ПОДВЕСКА МОНИТОРА (АНТИТРЯСКА) === */
+.bb-telemetry-screen {
+    background: rgba(0, 0, 0, 0.4); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 8px;
+    color: #cbd5e1; padding: 12px; font-size: 13px; 
+    height: 120px; /* СТРОГО фиксированная высота */
+    overflow-y: auto; overflow-x: hidden;
+    box-shadow: inset 0 2px 10px rgba(0,0,0,0.5); line-height: 1.5; font-family: inherit;
+    /* Чтобы скроллбар всегда занимал место и не дергал текст */
+    scrollbar-gutter: stable; 
+}
+
+.bb-telemetry-screen::-webkit-scrollbar { width: 6px; }
+.bb-telemetry-screen::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 4px; }
+.bb-telemetry-screen::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
+.bb-telemetry-screen::-webkit-scrollbar-thumb:hover { background: #5bc0be; }
+
+.bb-telemetry-screen b { color: #fff; font-weight: 600; }
+.bb-telemetry-screen i { color: #fcd34d; font-style: italic; }
+
+.bb-map-close {
+    background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); 
+    color: #fff; padding: 12px; border-radius: 8px; cursor: pointer;
+    font-family: inherit; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    transition: all 0.2s; flex-shrink: 0; margin-top: 5px;
+}
+.bb-map-close:hover { background: rgba(255, 255, 255, 0.15); border-color: #fff; box-shadow: 0 0 15px rgba(255,255,255,0.1);}
+
+@media (max-width: 600px) {
+    .bb-map-modal { padding: 15px; width: 95vw; gap: 10px; }
+    .bb-map-title { font-size: 15px; }
+    .bb-header-tag { font-size: 9px; padding: 3px 8px; }
+    .bb-schematic-grid { gap: 8px; padding: 10px; min-height: 250px; }
+    .bb-zone { min-height: 50px; padding: 5px; }
+    .bb-zone-title { font-size: 9px; }
+    .bb-char-badge { width: 20px; height: 20px; font-size: 10px; }
+    .bb-telemetry-screen { font-size: 12px; padding: 10px; height: 100px; }
+    .bb-map-close { padding: 10px; font-size: 12px; }
+}
+/* === ПАНЕЛЬ УПРАВЛЕНИЯ ПАМЯТЬЮ === */
+.bb-map-controls {
+    display: flex; gap: 10px; margin-top: 5px; justify-content: space-between;
+}
+
+.bb-map-btn {
+    flex: 1; background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); 
+    color: #fff; padding: 12px; border-radius: 8px; cursor: pointer;
+    font-family: inherit; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    transition: all 0.2s;
+}
+
+.bb-map-btn:hover { background: rgba(255, 255, 255, 0.15); border-color: #fff; }
+
+.bb-btn-save { border-color: rgba(91, 192, 190, 0.5); color: #5bc0be; }
+.bb-btn-save:hover { background: rgba(91, 192, 190, 0.2); border-color: #5bc0be; box-shadow: 0 0 15px rgba(91, 192, 190, 0.4); }
+
+.bb-btn-clear { border-color: rgba(239, 68, 68, 0.5); color: #ef4444; }
+.bb-btn-clear:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
+/* === ЦЕНТР УПРАВЛЕНИЯ (ХАБ) === */
+.bb-hub-modal {
+    background: rgba(20, 20, 25, 0.95); backdrop-filter: blur(20px);
+    border: 1px solid rgba(91, 192, 190, 0.3);
+    border-radius: 12px; padding: 20px; width: 400px; max-width: 90vw;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.8), inset 0 0 0 1px rgba(255,255,255,0.05);
+    display: flex; flex-direction: column; gap: 15px;
+    animation: bootUpModal 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.bb-hub-btn {
+    background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); 
+    color: #e2e8f0; padding: 12px; border-radius: 8px; cursor: pointer;
+    font-family: inherit; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
+    transition: all 0.2s;
+}
+
+.bb-hub-btn:hover { background: rgba(91, 192, 190, 0.15); border-color: #5bc0be; color: #fff; transform: translateY(-2px); }
+.bb-hub-btn-danger:hover { background: rgba(239, 68, 68, 0.15); border-color: #ef4444; }
+
+.bb-memory-viewer {
+    background: rgba(0, 0, 0, 0.5); border: 1px dashed rgba(255, 255, 255, 0.2);
+    border-radius: 6px; padding: 10px; font-size: 12px; color: #94a3b8;
+    max-height: 150px; overflow-y: auto; display: none; line-height: 1.4;
+}
+.bb-memory-viewer.active { display: block; animation: popInTags 0.3s ease forwards; }
+.bb-memory-viewer span { color: #5bc0be; font-weight: bold; }

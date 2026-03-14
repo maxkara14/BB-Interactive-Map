@@ -1,0 +1,12 @@
+{
+    "display_name": "BB Interactive Map",
+    "loading_order": 21,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "BruniikBron",
+    "version": "1.0.0",
+    "homePage": "",
+    "auto_update": false
+}
