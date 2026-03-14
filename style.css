@@ -59,7 +59,50 @@
     background-size: 15px 15px; border-radius: 12px; min-height: 350px;
 }
 
-.zone-center { grid-area: c; border-color: rgba(255, 255, 255, 0.5) !important; background: rgba(255, 255, 255, 0.1) !important;}
+.zone-center { 
+    grid-area: c; 
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.5);
+}
+
+/* === МИГАЮЩИЙ ИНДИКАТОР ИГРОКА (Радарный пинг) === */
+.zone-center::after {
+    content: '';
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    width: 10px;
+    height: 10px;
+    background: #4ade80;
+    border-radius: 50%;
+    box-shadow: 0 0 8px #4ade80;
+    animation: radarPing 1.5s infinite ease-out;
+    z-index: 15;
+}
+
+@keyframes radarPing {
+    0% { transform: scale(0.8); opacity: 0.8; box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7); }
+    70% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 6px rgba(74, 222, 128, 0); }
+    100% { transform: scale(0.8); opacity: 0.8; box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+}
+
+/* === УНИКАЛЬНАЯ ФИШКА ИГРОКА === */
+.bb-char-badge.user-char {
+    background: #5bc0be; /* Стильный бирюзовый */
+    box-shadow: 0 0 8px rgba(91, 192, 190, 0.6);
+    border-color: #fff;
+    animation: userBeaconPulse 2.5s infinite;
+}
+.bb-char-badge.user-char:hover {
+    background: #4fd1c5;
+    box-shadow: 0 0 15px rgba(91, 192, 190, 0.9);
+    animation-play-state: paused;
+}
+
+@keyframes userBeaconPulse {
+    0% { box-shadow: 0 0 0 0 rgba(91, 192, 190, 0.7); }
+    70% { box-shadow: 0 0 0 8px rgba(91, 192, 190, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(91, 192, 190, 0); }
+}
 .zone-north { grid-area: n; } .zone-south { grid-area: s; }
 .zone-east { grid-area: e; } .zone-west { grid-area: w; }
 .zone-northwest { grid-area: nw; } .zone-northeast { grid-area: ne; }
@@ -75,8 +118,9 @@
 
 /* Класс для зафиксированной зоны (когда кликнул) */
 .node-locked {
-    border-color: #5bc0be !important; border-style: solid !important;
-    box-shadow: 0 0 15px rgba(91, 192, 190, 0.4) !important; transform: scale(1.05); z-index: 20;
+    outline: 2px solid #5bc0be; outline-offset: 3px;
+    box-shadow: inset 0 0 15px rgba(91, 192, 190, 0.2), 0 0 15px rgba(91, 192, 190, 0.4) !important; 
+    transform: scale(1.05); z-index: 20;
 }
 
 .threat-safe:hover { border-color: rgba(255, 255, 255, 0.7); background: rgba(255, 255, 255, 0.15); }
