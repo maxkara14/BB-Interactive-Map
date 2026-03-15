@@ -1,6 +1,5 @@
 /* global toastr, jQuery, SillyTavern */
 
-// Подключаемся напрямую к ядру SillyTavern (как это делают взрослые расширения вроде Маринары)
 import { setExtensionPrompt, chat_metadata, saveChatDebounced } from '../../../../script.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
@@ -10,7 +9,7 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 </task>
 
 <rules>
-1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.).
+1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.). CRITICAL: Each zone MUST have a UNIQUE "position". Never assign the same position to multiple zones.
 2. Put characters INSIDE their current zone.
 3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Ночь | 🌧️ Идет дождь" or "☀️ День | ☕ Спокойно"). Use '|' to separate distinct atmospheric traits.
 4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (Short atmospheric phrase describing WHY, e.g., "Комфортно. Тепло. Аура безопасности" or "Холод, тьма, присутствие врагов").
@@ -94,7 +93,6 @@ function buildMapContextString(mapData) {
     return contextStr;
 }
 
-// === НОВАЯ СИСТЕМА ПАМЯТИ (ПРИВЯЗАНА К ТЕКУЩЕМУ ЧАТУ) ===
 function getMapDataForCurrentChat() {
     if (!chat_metadata) return null;
     return chat_metadata['bb_map_data'] || null;
@@ -104,7 +102,6 @@ function injectCurrentMapContext() {
     try {
         const mapData = getMapDataForCurrentChat();
         if (mapData && mapData.context) {
-            // Вставляем промпт через официальное API (ID, Text, Position=2 (Depth), Depth=2)
             setExtensionPrompt('bb_map_injector', mapData.context, 2, 2);
         } else {
             setExtensionPrompt('bb_map_injector', '', 2, 2);
@@ -170,7 +167,8 @@ function showControlCenter() {
 
     if (mapData && mapData.raw) {
         document.getElementById('bb-hub-open-btn').onclick = function() {
-            showRadarModal(mapData.raw);
+            // ПЕРЕДАЕМ ФЛАГ isSavedMap = true
+            showRadarModal(mapData.raw, true);
         };
     }
 
@@ -193,9 +191,9 @@ function showControlCenter() {
     clearBtn.onclick = function() {
         try {
             if (chat_metadata) {
-                delete chat_metadata['bb_map_data']; // Удаляем память ИМЕННО из этого чата
-                saveChatDebounced(); // Сохраняем файл чата
-                injectCurrentMapContext(); // Обновляем промпт (он станет пустым)
+                delete chat_metadata['bb_map_data']; 
+                saveChatDebounced(); 
+                injectCurrentMapContext(); 
             }
         } catch (e) {
             console.error("[BB Map] Ошибка очистки API:", e);
@@ -224,7 +222,8 @@ function showControlCenter() {
     };
 }
 
-function showRadarModal(data) {
+// ДОБАВЛЕН АРГУМЕНТ isSavedMap (по умолчанию false)
+function showRadarModal(data, isSavedMap = false) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -238,9 +237,42 @@ function showRadarModal(data) {
 
     const userName = SillyTavern.getContext().name1 || "";
 
+    // === ПРЕДОХРАНИТЕЛЬ ОТ СТОЛКНОВЕНИЙ: СЛИВАЕМ ДУБЛИКАТЫ ===
+    const mergedZones = {};
     (data.zones || []).forEach(zone => {
         if (!allowedPositions.includes(zone.position)) return;
+        
+        if (!mergedZones[zone.position]) {
+            mergedZones[zone.position] = { ...zone }; // Создаем новую зону
+        } else {
+            // Если зона уже занята, "свариваем" их вместе!
+            mergedZones[zone.position].name += " / " + zone.name;
+            mergedZones[zone.position].summary += " " + zone.summary;
+            
+            // Забираем наивысший уровень угрозы из двух
+            if (zone.threat_level === 'danger' || mergedZones[zone.position].threat_level === 'danger') {
+                mergedZones[zone.position].threat_level = 'danger';
+            } else if (zone.threat_level === 'tension' && mergedZones[zone.position].threat_level !== 'danger') {
+                mergedZones[zone.position].threat_level = 'tension';
+            }
+            
+            // Объединяем причину угрозы
+            if (zone.threat_reason) {
+                mergedZones[zone.position].threat_reason = (mergedZones[zone.position].threat_reason ? mergedZones[zone.position].threat_reason + " | " : "") + zone.threat_reason;
+            }
 
+            // Переносим персонажей и объекты
+            if (zone.characters) {
+                mergedZones[zone.position].characters = (mergedZones[zone.position].characters || []).concat(zone.characters);
+            }
+            if (zone.poi) {
+                mergedZones[zone.position].poi = (mergedZones[zone.position].poi || []).concat(zone.poi);
+            }
+        }
+    });
+
+    // === ТЕПЕРЬ ОТРИСОВЫВАЕМ ЧИСТЫЕ (БЕЗ ДУБЛИКАТОВ) ЗОНЫ ===
+    Object.values(mergedZones).forEach(zone => {
         let charsHtml = '';
         (zone.characters || []).forEach(char => {
             const safeName = escapeHtml(char.name);
@@ -288,6 +320,11 @@ function showRadarModal(data) {
         tagsHtml = tags.map(t => `<span class="bb-header-tag">${escapeHtml(t)}</span>`).join('');
     }
 
+    // === ДИНАМИЧЕСКАЯ КНОПКА СОХРАНЕНИЯ ===
+    let saveBtnHtml = isSavedMap
+        ? `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn" style="opacity: 0.5; cursor: not-allowed; background: rgba(91, 192, 190, 0.1);" disabled>✅ УЖЕ В ПАМЯТИ</button>`
+        : `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn">💾 ЗАПОМНИТЬ ЛОКАЦИЮ</button>`;
+
     overlay.innerHTML = `
         <div class="bb-map-modal">
             <div class="bb-map-header-container">
@@ -304,7 +341,7 @@ function showRadarModal(data) {
             </div>
 
             <div class="bb-map-controls">
-                <button class="bb-map-btn bb-btn-save" id="bb-map-save-btn">💾 ЗАПОМНИТЬ ЛОКАЦИЮ</button>
+                ${saveBtnHtml}
                 <button class="bb-map-btn" id="bb-map-back-btn">НАЗАД В ТЕРМИНАЛ</button>
             </div>
         </div>
@@ -345,40 +382,42 @@ function showRadarModal(data) {
         });
     });
 
+    // === ПРЕДОХРАНИТЕЛЬ: СОХРАНЯЕМ ТОЛЬКО ЕСЛИ КАРТА НОВАЯ ===
     const saveBtn = document.getElementById('bb-map-save-btn');
-    saveBtn.onclick = function() {
-        try {
-            if (chat_metadata) {
-                const contextStr = buildMapContextString(data);
-                // Записываем данные в файл текущего чата
-                chat_metadata['bb_map_data'] = {
-                    raw: data,
-                    context: contextStr
-                };
-                saveChatDebounced(); // Даем команду ST сохранить чат
-                injectCurrentMapContext(); // Мгновенно вшиваем в промпт
+    if (!isSavedMap) {
+        saveBtn.onclick = function() {
+            try {
+                if (chat_metadata) {
+                    const contextStr = buildMapContextString(data);
+                    chat_metadata['bb_map_data'] = {
+                        raw: data,
+                        context: contextStr
+                    };
+                    saveChatDebounced(); 
+                    injectCurrentMapContext(); 
+                }
+            } catch (e) {
+                console.error("[BB Map] Ошибка сохранения API:", e);
             }
-        } catch (e) {
-            console.error("[BB Map] Ошибка сохранения API:", e);
-        }
-        
-        // @ts-ignore
-        toastr.success('Данные карты успешно привязаны к этому чату!', 'BB Map Memory');
+            
+            // @ts-ignore
+            toastr.success('Данные карты успешно привязаны к этому чату!', 'BB Map Memory');
 
-        saveBtn.innerHTML = "✅ УСПЕШНО ЗАПИСАНО В МОЗГ ИИ!";
-        saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
-        saveBtn.style.borderColor = "#4ade80";
-        saveBtn.style.color = "#4ade80";
-        saveBtn.style.transform = "scale(1.02)";
-        
-        setTimeout(() => {
-            saveBtn.innerHTML = "💾 ОБНОВИТЬ ЛОКАЦИЮ";
-            saveBtn.style.background = "";
-            saveBtn.style.borderColor = "";
-            saveBtn.style.color = "";
-            saveBtn.style.transform = "scale(1)";
-        }, 2000);
-    };
+            saveBtn.innerHTML = "✅ УСПЕШНО ЗАПИСАНО В МОЗГ ИИ!";
+            saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
+            saveBtn.style.borderColor = "#4ade80";
+            saveBtn.style.color = "#4ade80";
+            saveBtn.style.transform = "scale(1.02)";
+            
+            setTimeout(() => {
+                saveBtn.innerHTML = "💾 ОБНОВИТЬ ЛОКАЦИЮ";
+                saveBtn.style.background = "";
+                saveBtn.style.borderColor = "";
+                saveBtn.style.color = "";
+                saveBtn.style.transform = "scale(1)";
+            }, 2000);
+        };
+    }
 
     document.getElementById('bb-map-back-btn').onclick = () => {
         showControlCenter();
@@ -405,7 +444,7 @@ async function triggerMapScan(btnElement) {
         let result = await ctx.generateQuietPrompt(prompt);
         
         const data = extractJSON(result);
-        showRadarModal(data);
+        showRadarModal(data, false); // Это новый скан, передаем false
     } catch (err) {
         console.error(err);
         // @ts-ignore
@@ -468,19 +507,16 @@ function injectMapButtonToWandMenu() {
     }
 }
 
-// Теперь мы используем нативный ES Module, поэтому обертка IIFE не нужна.
 jQuery(async () => {
     try {
         const { eventSource, event_types } = SillyTavern.getContext();
         
-        // Слушаем загрузку приложения
         eventSource.on(event_types.APP_READY, () => {
             injectMapButtonToWandMenu();
             setupExtensionSettings();
-            injectCurrentMapContext(); // Вшиваем память при старте
+            injectCurrentMapContext(); 
         });
         
-        // МАГИЯ ЗДЕСЬ: Слушаем смену чата и автоматически подтягиваем нужную карту!
         eventSource.on(event_types.CHAT_CHANGED, () => {
             injectCurrentMapContext();
         });
