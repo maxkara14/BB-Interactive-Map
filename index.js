@@ -1,6 +1,6 @@
 /* global toastr, jQuery, SillyTavern */
 
-import { setExtensionPrompt, chat_metadata, saveChatDebounced } from '../../../../script.js';
+import { setExtensionPrompt, chat_metadata, saveChatDebounced, extension_prompt_roles, extension_prompt_types } from '../../../../script.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 
@@ -102,9 +102,10 @@ function injectCurrentMapContext() {
     try {
         const mapData = getMapDataForCurrentChat();
         if (mapData && mapData.context) {
-            setExtensionPrompt('bb_map_injector', mapData.context, 2, 2);
+            // Теперь мы четко говорим: ВСТАВИТЬ В ЧАТ (на глубину 2)
+            setExtensionPrompt('bb_map_injector', mapData.context, extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         } else {
-            setExtensionPrompt('bb_map_injector', '', 2, 2);
+            setExtensionPrompt('bb_map_injector', '', extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         }
     } catch (e) {
         console.error("[BB Map] Ошибка инъекции промпта:", e);
