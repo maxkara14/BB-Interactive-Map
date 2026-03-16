@@ -5,9 +5,10 @@ import { setExtensionPrompt, chat_metadata, saveChatDebounced, extension_prompt_
 const MODULE_NAME = "BB-Interactive-Map";
 
 const MAP_PROMPT = `<task>
-Analyze the recent roleplay context and generate a topological schematic of the immediate area.
+Analyze the recent roleplay context and generate a topological schematic of the environment.
+{{scaleInstruction}}
 </task>
-
+{{previousMap}}
 <rules>
 1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.). CRITICAL: Each zone MUST have a UNIQUE "position". Never assign the same position to multiple zones.
 2. Put characters INSIDE their current zone.
@@ -102,7 +103,6 @@ function injectCurrentMapContext() {
     try {
         const mapData = getMapDataForCurrentChat();
         if (mapData && mapData.context) {
-            // Теперь мы четко говорим: ВСТАВИТЬ В ЧАТ (на глубину 2)
             setExtensionPrompt('bb_map_injector', mapData.context, extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         } else {
             setExtensionPrompt('bb_map_injector', '', extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
@@ -134,6 +134,20 @@ function showControlCenter() {
         `;
     }
 
+    // === ПРЕМИУМ ПЕРЕКЛЮЧАТЕЛЬ МАСШТАБА (СЕГМЕНТИРОВАННАЯ КНОПКА) ===
+    const scaleSelectorHtml = `
+        <style>
+            .bb-scale-toggle { display: flex; background: #070709; border: 1px solid #1f1f22; border-radius: 8px; overflow: hidden; margin-bottom: -5px; }
+            .bb-scale-btn { flex: 1; padding: 10px 0; text-align: center; font-size: 11px; font-weight: bold; color: #64748b; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; justify-content: center; gap: 6px; }
+            .bb-scale-btn.active { background: rgba(91, 192, 190, 0.15); color: #5bc0be; border-bottom: 2px solid #5bc0be; }
+            .bb-scale-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.05); color: #e2e8f0; }
+        </style>
+        <div class="bb-scale-toggle" id="bb-map-scale-toggle" data-mode="local">
+            <div class="bb-scale-btn active" data-val="local"><i class="fa-solid fa-crosshairs"></i> Комната</div>
+            <div class="bb-scale-btn" data-val="global"><i class="fa-solid fa-globe"></i> Здание</div>
+        </div>
+    `;
+
     overlay.innerHTML = `
         <div class="bb-hub-modal">
             <div class="bb-map-header-container" style="border-bottom: none; padding-bottom: 0;">
@@ -142,6 +156,7 @@ function showControlCenter() {
             </div>
             
             ${openMapBtnHtml}
+            ${scaleSelectorHtml}
 
             <button class="bb-hub-btn" id="bb-hub-scan-btn">
                 <i class="fa-solid fa-satellite-dish"></i> ЗАПУСТИТЬ НОВЫЙ СКАН
@@ -154,7 +169,7 @@ function showControlCenter() {
             <div class="bb-memory-viewer" id="bb-memory-display"></div>
 
             <button class="bb-hub-btn bb-hub-btn-danger" id="bb-hub-clear-btn">
-                <i class="fa-solid fa-trash-can"></i> ОЧИСТИТЬ ПАМЯТЬ ЧАТА
+                <i class="fa-solid fa-trash-can"></i> ОЧИСТИТЬ ТЕКСТ ПАМЯТИ
             </button>
 
             <button class="bb-hub-btn" style="margin-top: 10px; border-color: transparent;" id="bb-hub-close-btn">
@@ -166,9 +181,18 @@ function showControlCenter() {
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.style.opacity = '1');
 
+    // Логика переключателя
+    const toggleBtns = overlay.querySelectorAll('.bb-scale-btn');
+    toggleBtns.forEach(btn => {
+        btn.addEventListener('click', function() {
+            toggleBtns.forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            document.getElementById('bb-map-scale-toggle').setAttribute('data-mode', this.getAttribute('data-val'));
+        });
+    });
+
     if (mapData && mapData.raw) {
         document.getElementById('bb-hub-open-btn').onclick = function() {
-            // ПЕРЕДАЕМ ФЛАГ isSavedMap = true
             showRadarModal(mapData.raw, true);
         };
     }
@@ -223,7 +247,6 @@ function showControlCenter() {
     };
 }
 
-// ДОБАВЛЕН АРГУМЕНТ isSavedMap (по умолчанию false)
 function showRadarModal(data, isSavedMap = false) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
@@ -238,31 +261,26 @@ function showRadarModal(data, isSavedMap = false) {
 
     const userName = SillyTavern.getContext().name1 || "";
 
-    // === ПРЕДОХРАНИТЕЛЬ ОТ СТОЛКНОВЕНИЙ: СЛИВАЕМ ДУБЛИКАТЫ ===
     const mergedZones = {};
     (data.zones || []).forEach(zone => {
         if (!allowedPositions.includes(zone.position)) return;
         
         if (!mergedZones[zone.position]) {
-            mergedZones[zone.position] = { ...zone }; // Создаем новую зону
+            mergedZones[zone.position] = { ...zone }; 
         } else {
-            // Если зона уже занята, "свариваем" их вместе!
             mergedZones[zone.position].name += " / " + zone.name;
             mergedZones[zone.position].summary += " " + zone.summary;
             
-            // Забираем наивысший уровень угрозы из двух
             if (zone.threat_level === 'danger' || mergedZones[zone.position].threat_level === 'danger') {
                 mergedZones[zone.position].threat_level = 'danger';
             } else if (zone.threat_level === 'tension' && mergedZones[zone.position].threat_level !== 'danger') {
                 mergedZones[zone.position].threat_level = 'tension';
             }
             
-            // Объединяем причину угрозы
             if (zone.threat_reason) {
                 mergedZones[zone.position].threat_reason = (mergedZones[zone.position].threat_reason ? mergedZones[zone.position].threat_reason + " | " : "") + zone.threat_reason;
             }
 
-            // Переносим персонажей и объекты
             if (zone.characters) {
                 mergedZones[zone.position].characters = (mergedZones[zone.position].characters || []).concat(zone.characters);
             }
@@ -272,7 +290,6 @@ function showRadarModal(data, isSavedMap = false) {
         }
     });
 
-    // === ТЕПЕРЬ ОТРИСОВЫВАЕМ ЧИСТЫЕ (БЕЗ ДУБЛИКАТОВ) ЗОНЫ ===
     Object.values(mergedZones).forEach(zone => {
         let charsHtml = '';
         (zone.characters || []).forEach(char => {
@@ -321,7 +338,6 @@ function showRadarModal(data, isSavedMap = false) {
         tagsHtml = tags.map(t => `<span class="bb-header-tag">${escapeHtml(t)}</span>`).join('');
     }
 
-    // === ДИНАМИЧЕСКАЯ КНОПКА СОХРАНЕНИЯ ===
     let saveBtnHtml = isSavedMap
         ? `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn" style="opacity: 0.5; cursor: not-allowed; background: rgba(91, 192, 190, 0.1);" disabled>✅ УЖЕ В ПАМЯТИ</button>`
         : `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn">💾 ЗАПОМНИТЬ ЛОКАЦИЮ</button>`;
@@ -383,7 +399,6 @@ function showRadarModal(data, isSavedMap = false) {
         });
     });
 
-    // === ПРЕДОХРАНИТЕЛЬ: СОХРАНЯЕМ ТОЛЬКО ЕСЛИ КАРТА НОВАЯ ===
     const saveBtn = document.getElementById('bb-map-save-btn');
     if (!isSavedMap) {
         saveBtn.onclick = function() {
@@ -404,7 +419,7 @@ function showRadarModal(data, isSavedMap = false) {
             // @ts-ignore
             toastr.success('Данные карты успешно привязаны к этому чату!', 'BB Map Memory');
 
-            saveBtn.innerHTML = "✅ УСПЕШНО ЗАПИСАНО В МОЗГ ИИ!";
+            saveBtn.innerHTML = "✅ ПАМЯТЬ УСПЕШНО СОХРАНЕНА!";
             saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
             saveBtn.style.borderColor = "#4ade80";
             saveBtn.style.color = "#4ade80";
@@ -433,19 +448,42 @@ async function triggerMapScan(btnElement) {
     }
 
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
+    
+    // === ЧИТАЕМ РЕЖИМ МАСШТАБА ИЗ UI ===
+    const scaleToggle = document.getElementById('bb-map-scale-toggle');
+    const scaleMode = scaleToggle ? scaleToggle.getAttribute('data-mode') : 'local';
+    
+    let scaleInstruction = "";
+    if (scaleMode === 'global') {
+        scaleInstruction = `[CRITICAL MACRO SCALE]: Map the ENTIRE building/district. "center" is the current room as a whole. You MUST populate ALL 8 surrounding zones (north, south, east, west, northwest, northeast, southwest, southeast) with logical adjacent rooms, corridors, facilities, or outdoor areas to fill the entire 3x3 grid. Invent logical surrounding locations if they aren't in the chat. DO NOT LEAVE ZONES EMPTY.`;
+    } else {
+        scaleInstruction = `[CRITICAL MICRO SCALE]: Map strictly the IMMEDIATE single room. "center" is the exact spot the characters are standing. "north/south/east/west" and corners are just different walls/areas of this SAME room.`;
+    }
+
+    // === ПОДКЛЮЧАЕМ ИНЕРЦИОННУЮ ПАМЯТЬ ===
+    const prevData = getMapDataForCurrentChat();
+    let prevMapInstruction = "";
+    if (prevData && prevData.context) {
+        prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${prevData.context}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
+    }
+
     const oldHtml = btnElement.innerHTML;
     btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> СКАНИРОВАНИЕ...';
     btnElement.style.pointerEvents = "none"; 
 
     try {
-        let prompt = MAP_PROMPT.replace('{{lastMessages}}', recentMessages);
+        let prompt = MAP_PROMPT
+            .replace('{{lastMessages}}', recentMessages)
+            .replace('{{scaleInstruction}}', scaleInstruction)
+            .replace('{{previousMap}}', prevMapInstruction);
+            
         const ctx = SillyTavern.getContext();
         
         // @ts-ignore
         let result = await ctx.generateQuietPrompt(prompt);
         
         const data = extractJSON(result);
-        showRadarModal(data, false); // Это новый скан, передаем false
+        showRadarModal(data, false); 
     } catch (err) {
         console.error(err);
         // @ts-ignore
