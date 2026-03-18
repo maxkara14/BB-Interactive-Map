@@ -1,8 +1,18 @@
 /* global toastr, jQuery, SillyTavern */
 
-import { setExtensionPrompt, chat_metadata, saveChatDebounced, extension_prompt_roles, extension_prompt_types } from '../../../../script.js';
+import { setExtensionPrompt, chat_metadata, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
+import { extension_settings } from '../../../extensions.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
+
+if (!extension_settings[MODULE_NAME]) {
+    extension_settings[MODULE_NAME] = {
+        useCustomApi: false,
+        customApiUrl: 'https://api.groq.com/openai/v1',
+        customApiKey: '',
+        customApiModel: ''
+    };
+}
 
 const MAP_PROMPT = `<task>
 Analyze the recent roleplay context and generate a topological schematic of the environment.
@@ -49,6 +59,58 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 <context>
 Recent chat: """{{lastMessages}}"""
 </context>`;
+
+// =======================================================
+// ДВИЖОК УМНОЙ И БЕЗОПАСНОЙ ГЕНЕРАЦИИ (FAST PROMPT API)
+// =======================================================
+async function runMainGen(promptText) {
+    if (typeof generateQuietPrompt === 'function') {
+        return await generateQuietPrompt(promptText);
+    } else if (typeof window['generateQuietPrompt'] === 'function') {
+        return await window['generateQuietPrompt'](promptText);
+    } else {
+        throw new Error("Функция генерации Таверны не найдена.");
+    }
+}
+
+async function generateMapFast(promptText) {
+    const s = extension_settings[MODULE_NAME];
+    if (s.useCustomApi && s.customApiUrl && s.customApiModel) {
+        try {
+            const baseUrl = s.customApiUrl.replace(/\/$/, '');
+            const endpoint = baseUrl + '/chat/completions';
+            
+            const response = await fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${s.customApiKey || ''}`
+                },
+                body: JSON.stringify({
+                    model: s.customApiModel,
+                    messages: [
+                        { role: 'system', content: 'You are an internal JSON generator for a topological map. Output ONLY valid JSON.' },
+                        { role: 'user', content: promptText }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 4000,
+                    stream: false
+                })
+            });
+            
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            const content = data?.choices?.[0]?.message?.content || "";
+            if (!content.trim()) throw new Error("Прокси вернул пустоту.");
+            return content;
+        } catch (e) {
+            console.warn(`[BB Map] Ошибка кастомного API (${e.message}), перехват на основной API...`);
+            return await runMainGen(promptText);
+        }
+    } else {
+        return await runMainGen(promptText);
+    }
+}
 
 function escapeHtml(unsafe) {
     if (!unsafe) return "";
@@ -468,7 +530,7 @@ async function triggerMapScan(btnElement) {
     }
 
     const oldHtml = btnElement.innerHTML;
-    btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> СКАНИРОВАНИЕ...';
+    btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; СКАНИРОВАНИЕ...';
     btnElement.style.pointerEvents = "none"; 
 
     try {
@@ -477,10 +539,8 @@ async function triggerMapScan(btnElement) {
             .replace('{{scaleInstruction}}', scaleInstruction)
             .replace('{{previousMap}}', prevMapInstruction);
             
-        const ctx = SillyTavern.getContext();
-        
-        // @ts-ignore
-        let result = await ctx.generateQuietPrompt(prompt);
+        // Отправляем собранный промпт в быстрый API
+        let result = await generateMapFast(prompt);
         
         const data = extractJSON(result);
         showRadarModal(data, false); 
@@ -488,13 +548,15 @@ async function triggerMapScan(btnElement) {
         console.error(err);
         // @ts-ignore
         toastr.error('Ошибка карты: ' + err.message, 'BB Map');
+    } finally {
         btnElement.innerHTML = oldHtml;
         btnElement.style.pointerEvents = "auto";
-    } 
+    }
 }
 
 function setupExtensionSettings() {
     if ($('#bb-map-settings-wrapper').length > 0) return;
+    const s = extension_settings[MODULE_NAME];
     
     const settingsHtml = `
         <div id="bb-map-settings-wrapper" class="inline-drawer">
@@ -507,9 +569,26 @@ function setupExtensionSettings() {
                     <input type="checkbox" id="bb_map_enable_toggle" checked>
                     <span>Показывать кнопку "Интерактивная карта" в меню Расширения</span>
                 </label>
-                <small style="display:block; margin-top:5px; color:#94a3b8;">
+                <small style="display:block; margin-top:5px; margin-bottom: 10px; color:#94a3b8;">
                     Эта настройка включает или отключает доступ к терминалу радара.
                 </small>
+
+                <hr style="border-color: rgba(255,255,255,0.1); margin: 10px 0;">
+                
+                <span style="font-size: 13px; color: #cbd5e1; font-weight:bold;">⚡ Custom API (Для быстрой генерации карты):</span>
+                <label class="checkbox_label" style="margin-top: 5px;">
+                    <input type="checkbox" id="bb-map-cfg-usecustom" ${s.useCustomApi ? 'checked' : ''}>
+                    <span>Использовать свой API-ключ</span>
+                </label>
+                
+                <div id="bb-map-custom-api-block" style="display: ${s.useCustomApi ? 'flex' : 'none'}; flex-direction: column; gap: 8px; margin-top: 8px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;">
+                    <input type="text" id="bb-map-cfg-url" class="text_pole" placeholder="URL: http://example:1234/v1" value="${s.customApiUrl || ''}">
+                    <input type="password" id="bb-map-cfg-key" class="text_pole" placeholder="API Ключ" value="${s.customApiKey || ''}">
+                    <button id="bb-map-btn-connect" class="menu_button"><i class="fa-solid fa-plug"></i>&nbsp; Подключиться / Обновить</button>
+                    <select id="bb-map-cfg-model" class="text_pole" ${!s.customApiModel ? 'disabled' : ''}>
+                        <option value="${s.customApiModel || ''}">${s.customApiModel || 'Модели не загружены'}</option>
+                    </select>
+                </div>
             </div>
         </div>
     `;
@@ -520,6 +599,63 @@ function setupExtensionSettings() {
             $('#bb-map-menu-container').show();
         } else {
             $('#bb-map-menu-container').hide();
+        }
+    });
+
+    $('#bb-map-cfg-usecustom').on('change', function() {
+        const isChecked = $(this).is(':checked');
+        extension_settings[MODULE_NAME].useCustomApi = isChecked;
+        if (isChecked) $('#bb-map-custom-api-block').slideDown(200);
+        else $('#bb-map-custom-api-block').slideUp(200);
+        saveSettingsDebounced();
+    });
+
+    $('#bb-map-cfg-url, #bb-map-cfg-key').on('change input', function() {
+        extension_settings[MODULE_NAME].customApiUrl = $('#bb-map-cfg-url').val();
+        extension_settings[MODULE_NAME].customApiKey = $('#bb-map-cfg-key').val();
+        saveSettingsDebounced();
+    });
+    
+    $(document).on('change', '#bb-map-cfg-model', function() {
+         extension_settings[MODULE_NAME].customApiModel = $(this).val();
+         saveSettingsDebounced();
+    });
+
+    $('#bb-map-btn-connect').on('click', async function() {
+        const btn = $(this);
+        // @ts-ignore
+        const url = $('#bb-map-cfg-url').val().replace(/\/$/, '');
+        const key = $('#bb-map-cfg-key').val();
+        btn.html('<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; Подключение...');
+
+        try {
+            const response = await fetch(url + '/models', {
+                method: 'GET', headers: { 'Authorization': `Bearer ${key}` }
+            });
+            if (!response.ok) throw new Error(`Ошибка ${response.status}`);
+            const data = await response.json();
+            
+            if (data && data.data && Array.isArray(data.data)) {
+                const select = $('#bb-map-cfg-model');
+                select.empty();
+                data.data.forEach(m => select.append(`<option value="${m.id}">${m.id}</option>`));
+                select.prop('disabled', false);
+                
+                if (extension_settings[MODULE_NAME].customApiModel && select.find(`option[value="${extension_settings[MODULE_NAME].customApiModel}"]`).length) {
+                    select.val(extension_settings[MODULE_NAME].customApiModel);
+                } else {
+                    extension_settings[MODULE_NAME].customApiModel = select.val();
+                }
+                // @ts-ignore
+                toastr.success("Модели загружены!", "BB Map");
+                saveSettingsDebounced();
+            } else throw new Error("Нет моделей.");
+        } catch (e) {
+            console.error(e);
+            // @ts-ignore
+            toastr.error(`Ошибка: ${e.message}`, "BB Map");
+        } finally {
+            btn.html('<i class="fa-solid fa-plug"></i>&nbsp; Подключиться / Обновить');
         }
     });
 }
