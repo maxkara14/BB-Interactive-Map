@@ -10,9 +10,12 @@ if (!extension_settings[MODULE_NAME]) {
         useCustomApi: false,
         customApiUrl: 'https://api.groq.com/openai/v1',
         customApiKey: '',
-        customApiModel: ''
+        customApiModel: '',
+        useMacro: false // НОВАЯ НАСТРОЙКА ДЛЯ МАКРОСА
     };
 }
+
+let currentMapData = null;
 
 const MAP_PROMPT = `<task>
 Analyze the recent roleplay context and generate a topological schematic of the environment.
@@ -60,9 +63,6 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 Recent chat: """{{lastMessages}}"""
 </context>`;
 
-// =======================================================
-// ДВИЖОК УМНОЙ И БЕЗОПАСНОЙ ГЕНЕРАЦИИ (FAST PROMPT API)
-// =======================================================
 async function runMainGen(promptText) {
     if (typeof generateQuietPrompt === 'function') {
         return await generateQuietPrompt(promptText);
@@ -161,10 +161,11 @@ function getMapDataForCurrentChat() {
     return chat_metadata['bb_map_data'] || null;
 }
 
+// === ИЗМЕНЕНО: Логика инъекции теперь учитывает useMacro ===
 function injectCurrentMapContext() {
     try {
         const mapData = getMapDataForCurrentChat();
-        if (mapData && mapData.context) {
+        if (mapData && mapData.context && !extension_settings[MODULE_NAME].useMacro) {
             setExtensionPrompt('bb_map_injector', mapData.context, extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         } else {
             setExtensionPrompt('bb_map_injector', '', extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
@@ -196,7 +197,6 @@ function showControlCenter() {
         `;
     }
 
-    // === ПРЕМИУМ ПЕРЕКЛЮЧАТЕЛЬ МАСШТАБА (СЕГМЕНТИРОВАННАЯ КНОПКА) ===
     const scaleSelectorHtml = `
         <style>
             .bb-scale-toggle { display: flex; background: #070709; border: 1px solid #1f1f22; border-radius: 8px; overflow: hidden; margin-bottom: -5px; }
@@ -243,7 +243,6 @@ function showControlCenter() {
     document.body.appendChild(overlay);
     requestAnimationFrame(() => overlay.style.opacity = '1');
 
-    // Логика переключателя
     const toggleBtns = overlay.querySelectorAll('.bb-scale-btn');
     toggleBtns.forEach(btn => {
         btn.addEventListener('click', function() {
@@ -511,7 +510,6 @@ async function triggerMapScan(btnElement) {
 
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
     
-    // === ЧИТАЕМ РЕЖИМ МАСШТАБА ИЗ UI ===
     const scaleToggle = document.getElementById('bb-map-scale-toggle');
     const scaleMode = scaleToggle ? scaleToggle.getAttribute('data-mode') : 'local';
     
@@ -522,7 +520,6 @@ async function triggerMapScan(btnElement) {
         scaleInstruction = `[CRITICAL MICRO SCALE]: Map strictly the IMMEDIATE single room. "center" is the exact spot the characters are standing. "north/south/east/west" and corners are just different walls/areas of this SAME room.`;
     }
 
-    // === ПОДКЛЮЧАЕМ ИНЕРЦИОННУЮ ПАМЯТЬ ===
     const prevData = getMapDataForCurrentChat();
     let prevMapInstruction = "";
     if (prevData && prevData.context) {
@@ -539,7 +536,6 @@ async function triggerMapScan(btnElement) {
             .replace('{{scaleInstruction}}', scaleInstruction)
             .replace('{{previousMap}}', prevMapInstruction);
             
-        // Отправляем собранный промпт в быстрый API
         let result = await generateMapFast(prompt);
         
         const data = extractJSON(result);
@@ -589,6 +585,15 @@ function setupExtensionSettings() {
                         <option value="${s.customApiModel || ''}">${s.customApiModel || 'Модели не загружены'}</option>
                     </select>
                 </div>
+
+                <hr style="border-color: rgba(255,255,255,0.1); margin: 10px 0;">
+                
+                <span style="font-size: 13px; color: #cbd5e1; font-weight:bold;">⚙️ Для пресетов:</span>
+                <label class="checkbox_label" style="margin-top: 5px;">
+                    <input type="checkbox" id="bb-map-cfg-usemacro" ${s.useMacro ? 'checked' : ''}>
+                    <span>Использовать макрос <code>{{bb_map}}</code> вместо авто-вставки</span>
+                </label>
+                <span style="font-size: 10px; color: #94a3b8; line-height: 1.2; margin-bottom: 5px; display:block;">* Отключит автоматическое внедрение карты в промпт. Впишите <code>{{bb_map}}</code> в ваш пресет вручную.</span>
             </div>
         </div>
     `;
@@ -619,6 +624,13 @@ function setupExtensionSettings() {
     $(document).on('change', '#bb-map-cfg-model', function() {
          extension_settings[MODULE_NAME].customApiModel = $(this).val();
          saveSettingsDebounced();
+    });
+
+    // ОБРАБОТЧИК МАКРОСА
+    $('#bb-map-cfg-usemacro').on('change', function() {
+        extension_settings[MODULE_NAME].useMacro = $(this).is(':checked');
+        saveSettingsDebounced();
+        injectCurrentMapContext(); 
     });
 
     $('#bb-map-btn-connect').on('click', async function() {
@@ -686,6 +698,16 @@ jQuery(async () => {
     try {
         const { eventSource, event_types } = SillyTavern.getContext();
         
+        // РЕГИСТРАЦИЯ МАКРОСА В TAVERN API
+        const context = SillyTavern.getContext();
+        if (context.registerMacro) {
+            context.registerMacro('bb_map', () => {
+                const mapData = getMapDataForCurrentChat();
+                return (extension_settings[MODULE_NAME].useMacro && mapData && mapData.context) ? mapData.context : '';
+            });
+            console.log('[BB Map] Макрос {{bb_map}} зарегистрирован');
+        }
+
         eventSource.on(event_types.APP_READY, () => {
             injectMapButtonToWandMenu();
             setupExtensionSettings();
@@ -694,6 +716,19 @@ jQuery(async () => {
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
             injectCurrentMapContext();
+        });
+
+        // ЖЕЛЕЗОБЕТОННЫЙ ПЕРЕХВАТЧИК МАКРОСА
+        eventSource.on(event_types.GENERATE_AFTER_DATA, (generate_data) => {
+            if (extension_settings[MODULE_NAME].useMacro && generate_data && Array.isArray(generate_data.messages)) {
+                const mapData = getMapDataForCurrentChat();
+                const promptText = (mapData && mapData.context) ? mapData.context : '';
+                generate_data.messages.forEach(msg => {
+                    if (msg && msg.content && typeof msg.content === 'string' && msg.content.includes('{{bb_map}}')) {
+                        msg.content = msg.content.replace(/\{\{bb_map\}\}/g, promptText);
+                    }
+                });
+            }
         });
 
         setTimeout(() => {
