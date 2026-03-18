@@ -113,6 +113,9 @@
     border: 1px dashed rgba(255, 255, 255, 0.2); background: rgba(0, 0, 0, 0.3);
     border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px;
     transition: all 0.2s ease-out; cursor: crosshair; position: relative; min-height: 70px;
+    /* ИЗМЕНЕНО: Защита от вылезания текста за границы */
+    word-wrap: break-word; 
+    overflow: hidden;
 }
 .bb-zone:hover { transform: translateY(-3px); z-index: 10; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
 
@@ -136,8 +139,11 @@
 
 .bb-zone-title {
     color: #e2e8f0; font-size: 11px; font-weight: bold; text-align: center; text-transform: uppercase;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.15); padding-bottom: 4px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; width: 100%;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15); padding-bottom: 4px; width: 100%;
+    /* ИЗМЕНЕНО: Разрешаем перенос строк для длинных названий */
+    white-space: normal; 
+    word-wrap: break-word; 
+    line-height: 1.2;
 }
 
 .bb-zone-chars { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
