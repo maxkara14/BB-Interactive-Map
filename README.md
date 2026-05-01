@@ -20,9 +20,9 @@
 
 ## Скриншоты
 
-<img width="400" height="460" alt="BB Interactive Map terminal" src="https://github.com/user-attachments/assets/c33e7651-93e0-4930-b082-846e2f620224" />
-
 <img width="650" height="693" alt="BB Interactive Map grid" src="https://github.com/user-attachments/assets/3c98f148-f6a3-4d81-b0ea-ab11f0738240" />
+
+<img width="400" height="460" alt="BB Interactive Map terminal" src="https://github.com/user-attachments/assets/c33e7651-93e0-4930-b082-846e2f620224" />
 
 ## Установка
 
