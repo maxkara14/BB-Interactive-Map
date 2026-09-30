@@ -2,6 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap } from './map-state.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 
@@ -42,8 +43,8 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 2. Put characters INSIDE their current zone.
 3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Night | 🌧️ Rain" or "☀️ Day | ☕ Calm"). Use '|' to separate distinct atmospheric traits.
 4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (short phrase describing WHY, e.g., "Warm and quiet" or "Darkness and hostile presence").
-5. For EACH zone, list 1-3 "poi" (Points of Interest - items, details, furniture).
-6. For EACH character, provide "mood" (emoji + short state) and "attitude" (how they feel about the user).
+5. For EACH zone, list 1-3 "poi" (Points of Interest - items, details, furniture) as objects with "name" and a short "description".
+6. For EACH character, provide a short "description", "mood" (emoji + short state) and "attitude" (how they feel about the user).
 7. "thought" is a 1-sentence current thought of the character.
 8. Keep zone "name" very short (1-3 words).
 9. Output STRICTLY as raw JSON.
@@ -61,10 +62,11 @@ Analyze the recent roleplay context and generate a topological schematic of the 
       "summary": "Short description...",
       "threat_level": "safe",
       "threat_reason": "Warm light and calm surroundings",
-      "poi": ["Detail 1", "Object 2"],
+      "poi": [{ "name": "Object 1", "description": "A short visible detail" }],
       "characters": [
         { 
           "name": "Name",
+          "description": "A short visible detail",
           "mood": "😠 Irritated",
           "attitude": "Wary",
           "thought": "A brief thought..."
@@ -181,33 +183,11 @@ function extractJSON(text) {
     let start = str.indexOf('{');
     let end = str.lastIndexOf('}');
     if (start === -1 || end === -1) throw new Error(tr('Ответ не содержит JSON. Попробуйте ещё раз.', 'The response contains no JSON. Please try again.'));
-    return JSON.parse(str.substring(start, end + 1));
-}
-
-function buildMapContextString(mapData) {
-    if (!mapData || !mapData.zones) return "";
-    let contextStr = `[Map context: The player is at "${mapData.schematic_name}". Atmosphere: ${mapData.atmosphere}. `;
-    mapData.zones.forEach(zone => {
-        let chars = "";
-        if (zone.characters && zone.characters.length > 0) {
-            chars = " Characters: " + zone.characters.map(c => `${c.name} (${c.mood}, attitude: ${c.attitude})`).join(", ") + ".";
-        }
-        let poi = "";
-        if (zone.poi && zone.poi.length > 0) {
-            poi = " Objects: " + zone.poi.join(", ") + ".";
-        }
-        
-        let threatContext = "";
-        if (zone.threat_level === "danger") threatContext = ` [🔴 DANGER: ${zone.threat_reason || "Unknown"}]`;
-        else if (zone.threat_level === "tension") threatContext = ` [🟠 Tension: ${zone.threat_reason || "Suspicious"}]`;
-        else if (zone.threat_reason) threatContext = ` [🟢 Safe: ${zone.threat_reason}]`;
-
-        if (chars || poi || zone.threat_level !== "safe" || zone.threat_reason) {
-            contextStr += `Zone "${zone.name}" (${zone.position})${threatContext}: ${zone.summary}${chars}${poi} `;
-        }
-    });
-    contextStr += `]`;
-    return contextStr;
+    try {
+        return JSON.parse(str.substring(start, end + 1));
+    } catch {
+        throw new Error(tr('Ответ содержит некорректный JSON. Попробуйте ещё раз.', 'The response contains invalid JSON. Please try again.'));
+    }
 }
 
 function getMapDataForCurrentChat() {
@@ -230,6 +210,7 @@ function injectCurrentMapContext() {
 }
 
 function showControlCenter() {
+    const chatForHub = SillyTavern.getContext().chat;
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -250,6 +231,9 @@ function showControlCenter() {
             </button>
         `;
     }
+    const restoreBtnHtml = mapData?.previous?.raw
+        ? `<button class="bb-hub-btn" id="bb-hub-restore-btn">↶ ${tr('ВОССТАНОВИТЬ ПРЕДЫДУЩУЮ КАРТУ', 'RESTORE PREVIOUS MAP')}</button>`
+        : '';
 
     const scaleSelectorHtml = `
         <style>
@@ -272,6 +256,7 @@ function showControlCenter() {
             </div>
             
             ${openMapBtnHtml}
+            ${restoreBtnHtml}
             ${scaleSelectorHtml}
 
             <button class="bb-hub-btn" id="bb-hub-scan-btn">
@@ -312,6 +297,21 @@ function showControlCenter() {
         };
     }
 
+    const restoreBtn = document.getElementById('bb-hub-restore-btn');
+    if (restoreBtn) restoreBtn.onclick = () => {
+        if (SillyTavern.getContext().chat !== chatForHub) {
+            showControlCenter();
+            return;
+        }
+        const restored = restorePreviousMap(getMapDataForCurrentChat());
+        if (!restored || !chat_metadata) return;
+        chat_metadata['bb_map_data'] = restored;
+        saveChatDebounced();
+        injectCurrentMapContext();
+        showControlCenter();
+        toastr.success(tr('Предыдущая карта восстановлена.', 'Previous map restored.'), 'BB Map');
+    };
+
     document.getElementById('bb-hub-scan-btn').onclick = function() {
         triggerMapScan(this);
     };
@@ -329,6 +329,10 @@ function showControlCenter() {
 
     const clearBtn = document.getElementById('bb-hub-clear-btn');
     clearBtn.onclick = function() {
+        if (SillyTavern.getContext().chat !== chatForHub) {
+            showControlCenter();
+            return;
+        }
         try {
             if (chat_metadata) {
                 delete chat_metadata['bb_map_data']; 
@@ -362,7 +366,7 @@ function showControlCenter() {
     };
 }
 
-function showRadarModal(data, isSavedMap = false) {
+function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext().chat) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -409,7 +413,8 @@ function showRadarModal(data, isSavedMap = false) {
         let charsHtml = '';
         (zone.characters || []).forEach(char => {
             const safeName = escapeHtml(char.name);
-            const charInfo = `<b>👤 ${safeName}</b><br/>🎭 <b>${tr('Состояние:', 'Mood:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || tr('😐 Спокоен', '😐 Calm'))}</span><br/>🤝 <b>${tr('Отношение:', 'Attitude:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || tr('Нейтральное', 'Neutral'))}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
+            const description = char.description ? `<br/>${escapeHtml(char.description)}` : '';
+            const charInfo = `<b>👤 ${safeName}</b>${description}<br/>🎭 <b>${tr('Состояние:', 'Mood:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || tr('😐 Спокоен', '😐 Calm'))}</span><br/>🤝 <b>${tr('Отношение:', 'Attitude:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || tr('Нейтральное', 'Neutral'))}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
             const dataIndex = telemetryData.push(charInfo) - 1;
             
             const isUser = userName && safeName.toLowerCase().includes(userName.toLowerCase());
@@ -433,7 +438,10 @@ function showRadarModal(data, isSavedMap = false) {
         let poiHtml = '';
         if (zone.poi && Array.isArray(zone.poi) && zone.poi.length > 0) {
             const spacer = reasonHtml ? '<br/>' : '<br/><br/>';
-            poiHtml = `${spacer}<b style="color:#5bc0be;">🔍 ${tr('Объекты:', 'Objects:')}</b><br/>` + zone.poi.map(p => `• <span style="color:#cbd5e1;">${escapeHtml(p)}</span>`).join('<br/>');
+            poiHtml = `${spacer}<b style="color:#5bc0be;">🔍 ${tr('Объекты:', 'Objects:')}</b><br/>` + zone.poi.map(p => {
+                const detail = typeof p === 'object' && p?.description ? ` — ${escapeHtml(p.description)}` : '';
+                return `• <span style="color:#cbd5e1;">${escapeHtml(poiName(p))}${detail}</span>`;
+            }).join('<br/>');
         }
 
         const zoneInfo = `<b>📍 ${safeZoneName}</b><br/><small style="color:#94a3b8;">${escapeHtml(zone.summary)}</small>${reasonHtml}${poiHtml}`;
@@ -518,35 +526,27 @@ function showRadarModal(data, isSavedMap = false) {
     if (!isSavedMap) {
         saveBtn.onclick = function() {
             try {
-                if (chat_metadata) {
-                    const contextStr = buildMapContextString(data);
-                    chat_metadata['bb_map_data'] = {
-                        raw: data,
-                        context: contextStr
-                    };
-                    saveChatDebounced(); 
-                    injectCurrentMapContext(); 
+                if (!chat_metadata || SillyTavern.getContext().chat !== chatForMap) {
+                    throw new Error(tr('Чат сменился. Запустите скан ещё раз.', 'The chat changed. Please scan again.'));
                 }
+                chat_metadata['bb_map_data'] = createSavedMap(data, getMapDataForCurrentChat());
+                saveChatDebounced();
+                injectCurrentMapContext();
             } catch (e) {
-                console.error("[BB Map] Ошибка сохранения API:", e);
+                toastr.error(e.message, 'BB Map Memory');
+                return;
             }
             
             // @ts-ignore
             toastr.success(tr('Карта сохранена для этого чата!', 'Map saved for this chat!'), 'BB Map Memory');
 
             saveBtn.textContent = `✅ ${tr('КАРТА СОХРАНЕНА!', 'MAP SAVED!')}`;
+            saveBtn.disabled = true;
             saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
             saveBtn.style.borderColor = "#4ade80";
             saveBtn.style.color = "#4ade80";
             saveBtn.style.transform = "scale(1.02)";
             
-            setTimeout(() => {
-                saveBtn.textContent = `💾 ${tr('ОБНОВИТЬ ЛОКАЦИЮ', 'UPDATE LOCATION')}`;
-                saveBtn.style.background = "";
-                saveBtn.style.borderColor = "";
-                saveBtn.style.color = "";
-                saveBtn.style.transform = "scale(1)";
-            }, 2000);
         };
     }
 
@@ -592,12 +592,18 @@ async function triggerMapScan(btnElement) {
             
         let result = await generateMapFast(prompt);
         
-        const data = extractJSON(result);
-        showRadarModal(data, false); 
+        if (SillyTavern.getContext().chat !== chat) {
+            toastr.warning(tr('Чат сменился во время сканирования. Результат не сохранён.', 'The chat changed during the scan. The result was discarded.'), 'BB Map');
+            return;
+        }
+        const data = normalizeMapData(extractJSON(result), getMapDataForCurrentChat()?.raw);
+        showRadarModal(data, false, chat);
     } catch (err) {
-        console.error(err);
         // @ts-ignore
-        toastr.error(tr('Ошибка карты: ', 'Map error: ') + err.message, 'BB Map');
+        const message = err?.message === 'invalid_map'
+            ? tr('Ответ содержит некорректную структуру карты. Попробуйте ещё раз.', 'The response has an invalid map structure. Please try again.')
+            : err.message;
+        toastr.error(tr('Ошибка карты: ', 'Map error: ') + message, 'BB Map');
     } finally {
         btnElement.innerHTML = oldHtml;
         btnElement.style.pointerEvents = "auto";

@@ -8,6 +8,8 @@ A scene map and spatial memory extension for SillyTavern. It scans recent chat m
 
 - Room and building scale maps with characters, objects, atmosphere, and threat levels.
 - Saved map memory per chat, injected into the model context by default.
+- A new scan stays a preview until you save it. The previous saved map can be restored from the map terminal.
+- Existing maps still open; new records include short character and object descriptions.
 - Optional `{{bb_map}}` macro for manual prompt placement.
 - Interface language: browser language, Russian, or English. Prompts remain in English; map descriptions follow the chat language.
 - Scan source: current SillyTavern connection, a Connection Manager profile, or a direct OpenAI-compatible Custom API.
