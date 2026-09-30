@@ -11,11 +11,26 @@ if (!extension_settings[MODULE_NAME]) {
         customApiUrl: 'https://api.groq.com/openai/v1',
         customApiKey: '',
         customApiModel: '',
-        useMacro: false // НОВАЯ НАСТРОЙКА ДЛЯ МАКРОСА
+        useMacro: false
     };
 }
 
-let currentMapData = null;
+const settings = extension_settings[MODULE_NAME];
+if (!['main', 'profile', 'custom'].includes(settings.generationSource)) {
+    settings.generationSource = settings.useCustomApi ? 'custom' : 'main';
+}
+settings.uiLanguage ??= 'auto';
+settings.connectionProfileId ??= '';
+settings.showMenuButton ??= true;
+
+function currentLanguage() {
+    if (settings.uiLanguage === 'ru' || settings.uiLanguage === 'en') return settings.uiLanguage;
+    return (navigator.language || 'en').toLowerCase().startsWith('ru') ? 'ru' : 'en';
+}
+
+function tr(ru, en) {
+    return currentLanguage() === 'ru' ? ru : en;
+}
 
 const MAP_PROMPT = `<task>
 Analyze the recent roleplay context and generate a topological schematic of the environment.
@@ -25,33 +40,34 @@ Analyze the recent roleplay context and generate a topological schematic of the 
 <rules>
 1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.). CRITICAL: Each zone MUST have a UNIQUE "position". Never assign the same position to multiple zones.
 2. Put characters INSIDE their current zone.
-3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Ночь | 🌧️ Идет дождь" or "☀️ День | ☕ Спокойно"). Use '|' to separate distinct atmospheric traits.
-4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (Short atmospheric phrase describing WHY, e.g., "Комфортно. Тепло. Аура безопасности" or "Холод, тьма, присутствие врагов").
+3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Night | 🌧️ Rain" or "☀️ Day | ☕ Calm"). Use '|' to separate distinct atmospheric traits.
+4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (short phrase describing WHY, e.g., "Warm and quiet" or "Darkness and hostile presence").
 5. For EACH zone, list 1-3 "poi" (Points of Interest - items, details, furniture).
 6. For EACH character, provide "mood" (emoji + short state) and "attitude" (how they feel about the user).
 7. "thought" is a 1-sentence current thought of the character.
 8. Keep zone "name" very short (1-3 words).
 9. Output STRICTLY as raw JSON.
+10. Write descriptive JSON values in the language of the recent chat. Keep JSON keys and enum values in English.
 </rules>
 
 <format>
 {
-  "schematic_name": "Общее название локации",
-  "atmosphere": "Атмосфера | Время | Погода",
+  "schematic_name": "Location name",
+  "atmosphere": "Atmosphere | Time | Weather",
   "zones": [
     {
       "position": "center", 
-      "name": "Название",
-      "summary": "Краткое описание...",
+      "name": "Zone name",
+      "summary": "Short description...",
       "threat_level": "safe",
-      "threat_reason": "Комфортно. Мягкий свет, аура спокойствия",
-      "poi": ["Деталь 1", "Объект 2"],
+      "threat_reason": "Warm light and calm surroundings",
+      "poi": ["Detail 1", "Object 2"],
       "characters": [
         { 
-          "name": "Имя", 
-          "mood": "😠 Раздражен", 
-          "attitude": "Настороженное", 
-          "thought": "Мысль..." 
+          "name": "Name",
+          "mood": "😠 Irritated",
+          "attitude": "Wary",
+          "thought": "A brief thought..."
         }
       ]
     }
@@ -69,13 +85,51 @@ async function runMainGen(promptText) {
     } else if (typeof window['generateQuietPrompt'] === 'function') {
         return await window['generateQuietPrompt'](promptText);
     } else {
-        throw new Error("Функция генерации Таверны не найдена.");
+        throw new Error(tr('Функция генерации SillyTavern недоступна.', 'SillyTavern generation is unavailable.'));
     }
 }
 
+function getProfileService() {
+    const service = SillyTavern.getContext().ConnectionManagerRequestService;
+    if (!service || typeof service.getSupportedProfiles !== 'function' || typeof service.sendRequest !== 'function') {
+        throw new Error(tr('Менеджер подключений недоступен.', 'Connection Manager is unavailable.'));
+    }
+    return service;
+}
+
+async function runProfileGen(promptText) {
+    const service = getProfileService();
+    let profiles;
+    try {
+        profiles = service.getSupportedProfiles();
+    } catch {
+        throw new Error(tr('Менеджер подключений недоступен.', 'Connection Manager is unavailable.'));
+    }
+    if (!settings.connectionProfileId || !profiles.some(profile => profile.id === settings.connectionProfileId)) {
+        throw new Error(tr('Выберите доступный профиль подключения.', 'Select an available connection profile.'));
+    }
+    let response;
+    try {
+        response = await service.sendRequest(settings.connectionProfileId,
+            [{ role: 'system', content: 'Generate only the requested JSON map.' }, { role: 'user', content: promptText }],
+            4000, { stream: false, extractData: true, includePreset: true, includeInstruct: true });
+    } catch {
+        throw new Error(tr('Запрос через профиль не удался.', 'The profile request failed.'));
+    }
+    const content = typeof response === 'string' ? response : response?.content;
+    if (typeof content !== 'string' || !content.trim()) {
+        throw new Error(tr('Профиль вернул пустой ответ.', 'The profile returned an empty response.'));
+    }
+    return content;
+}
+
 async function generateMapFast(promptText) {
-    const s = extension_settings[MODULE_NAME];
-    if (s.useCustomApi && s.customApiUrl && s.customApiModel) {
+    const s = settings;
+    if (s.generationSource === 'profile') return runProfileGen(promptText);
+    if (s.generationSource === 'custom') {
+        if (!s.customApiUrl || !s.customApiModel) {
+            return runMainGen(promptText);
+        }
         try {
             const baseUrl = s.customApiUrl.replace(/\/$/, '');
             const endpoint = baseUrl + '/chat/completions';
@@ -101,10 +155,10 @@ async function generateMapFast(promptText) {
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             const content = data?.choices?.[0]?.message?.content || "";
-            if (!content.trim()) throw new Error("Прокси вернул пустоту.");
+            if (!content.trim()) throw new Error('Empty response');
             return content;
-        } catch (e) {
-            console.warn(`[BB Map] Ошибка кастомного API (${e.message}), перехват на основной API...`);
+        } catch {
+            console.warn('[BB Map] Custom API failed; using the main connection.');
             return await runMainGen(promptText);
         }
     } else {
@@ -126,30 +180,30 @@ function extractJSON(text) {
     let str = String(text).trim().replace(/^```json/i, '').replace(/^```/i, '').replace(/```$/i, '').trim();
     let start = str.indexOf('{');
     let end = str.lastIndexOf('}');
-    if (start === -1 || end === -1) throw new Error("API не вернуло JSON. Попробуйте еще раз.");
+    if (start === -1 || end === -1) throw new Error(tr('Ответ не содержит JSON. Попробуйте ещё раз.', 'The response contains no JSON. Please try again.'));
     return JSON.parse(str.substring(start, end + 1));
 }
 
 function buildMapContextString(mapData) {
     if (!mapData || !mapData.zones) return "";
-    let contextStr = `[Системная справка: Игрок находится в локации "${mapData.schematic_name}". Атмосфера: ${mapData.atmosphere}. `;
+    let contextStr = `[Map context: The player is at "${mapData.schematic_name}". Atmosphere: ${mapData.atmosphere}. `;
     mapData.zones.forEach(zone => {
         let chars = "";
         if (zone.characters && zone.characters.length > 0) {
-            chars = " Персонажи: " + zone.characters.map(c => `${c.name} (${c.mood}, отношение: ${c.attitude})`).join(", ") + ".";
+            chars = " Characters: " + zone.characters.map(c => `${c.name} (${c.mood}, attitude: ${c.attitude})`).join(", ") + ".";
         }
         let poi = "";
         if (zone.poi && zone.poi.length > 0) {
-            poi = " Объекты: " + zone.poi.join(", ") + ".";
+            poi = " Objects: " + zone.poi.join(", ") + ".";
         }
         
         let threatContext = "";
-        if (zone.threat_level === "danger") threatContext = ` [🔴 ОПАСНОСТЬ: ${zone.threat_reason || "Неизвестно"}]`;
-        else if (zone.threat_level === "tension") threatContext = ` [🟠 Напряжение: ${zone.threat_reason || "Подозрительно"}]`;
-        else if (zone.threat_reason) threatContext = ` [🟢 Безопасно: ${zone.threat_reason}]`;
+        if (zone.threat_level === "danger") threatContext = ` [🔴 DANGER: ${zone.threat_reason || "Unknown"}]`;
+        else if (zone.threat_level === "tension") threatContext = ` [🟠 Tension: ${zone.threat_reason || "Suspicious"}]`;
+        else if (zone.threat_reason) threatContext = ` [🟢 Safe: ${zone.threat_reason}]`;
 
         if (chars || poi || zone.threat_level !== "safe" || zone.threat_reason) {
-            contextStr += `В зоне "${zone.name}" (${zone.position})${threatContext}: ${zone.summary}${chars}${poi} `;
+            contextStr += `Zone "${zone.name}" (${zone.position})${threatContext}: ${zone.summary}${chars}${poi} `;
         }
     });
     contextStr += `]`;
@@ -185,14 +239,14 @@ function showControlCenter() {
 
     const mapData = getMapDataForCurrentChat();
     const statusHtml = (mapData && mapData.context) 
-        ? `<div style="color: #4ade80; font-size: 11px; font-weight: bold; margin-top: 5px; animation: dangerPulse 2s infinite;">🟢 ПАМЯТЬ ЛОКАЦИИ АКТИВНА</div>`
-        : `<div style="color: #94a3b8; font-size: 11px; font-weight: bold; margin-top: 5px;">⚪ ПАМЯТЬ ЛОКАЦИИ ПУСТА</div>`;
+        ? `<div style="color: #4ade80; font-size: 11px; font-weight: bold; margin-top: 5px; animation: dangerPulse 2s infinite;">🟢 ${tr('ПАМЯТЬ ЛОКАЦИИ АКТИВНА', 'LOCATION MEMORY ACTIVE')}</div>`
+        : `<div style="color: #94a3b8; font-size: 11px; font-weight: bold; margin-top: 5px;">⚪ ${tr('ПАМЯТЬ ЛОКАЦИИ ПУСТА', 'LOCATION MEMORY EMPTY')}</div>`;
 
     let openMapBtnHtml = '';
     if (mapData && mapData.raw) {
         openMapBtnHtml = `
             <button class="bb-hub-btn" id="bb-hub-open-btn" style="border-color: rgba(91, 192, 190, 0.5); color: #5bc0be;">
-                <i class="fa-solid fa-map"></i> ОТКРЫТЬ СОХРАНЕННУЮ КАРТУ
+                <i class="fa-solid fa-map"></i> ${tr('ОТКРЫТЬ СОХРАНЁННУЮ КАРТУ', 'OPEN SAVED MAP')}
             </button>
         `;
     }
@@ -205,15 +259,15 @@ function showControlCenter() {
             .bb-scale-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.05); color: #e2e8f0; }
         </style>
         <div class="bb-scale-toggle" id="bb-map-scale-toggle" data-mode="local">
-            <div class="bb-scale-btn active" data-val="local"><i class="fa-solid fa-crosshairs"></i> Комната</div>
-            <div class="bb-scale-btn" data-val="global"><i class="fa-solid fa-globe"></i> Здание</div>
+            <div class="bb-scale-btn active" data-val="local"><i class="fa-solid fa-crosshairs"></i> ${tr('Комната', 'Room')}</div>
+            <div class="bb-scale-btn" data-val="global"><i class="fa-solid fa-globe"></i> ${tr('Здание', 'Building')}</div>
         </div>
     `;
 
     overlay.innerHTML = `
         <div class="bb-hub-modal">
             <div class="bb-map-header-container" style="border-bottom: none; padding-bottom: 0;">
-                <div class="bb-map-title">🛰️ ТЕРМИНАЛ КАРТЫ</div>
+                <div class="bb-map-title">🛰️ ${tr('ТЕРМИНАЛ КАРТЫ', 'MAP TERMINAL')}</div>
                 ${statusHtml}
             </div>
             
@@ -221,21 +275,21 @@ function showControlCenter() {
             ${scaleSelectorHtml}
 
             <button class="bb-hub-btn" id="bb-hub-scan-btn">
-                <i class="fa-solid fa-satellite-dish"></i> ЗАПУСТИТЬ НОВЫЙ СКАН
+                <i class="fa-solid fa-satellite-dish"></i> ${tr('ЗАПУСТИТЬ НОВЫЙ СКАН', 'START NEW SCAN')}
             </button>
             
             <button class="bb-hub-btn" id="bb-hub-view-btn">
-                <i class="fa-solid fa-eye"></i> ПОСМОТРЕТЬ ТЕКСТ ПАМЯТИ
+                <i class="fa-solid fa-eye"></i> ${tr('ПОСМОТРЕТЬ ТЕКСТ ПАМЯТИ', 'VIEW MEMORY TEXT')}
             </button>
             
             <div class="bb-memory-viewer" id="bb-memory-display"></div>
 
             <button class="bb-hub-btn bb-hub-btn-danger" id="bb-hub-clear-btn">
-                <i class="fa-solid fa-trash-can"></i> ОЧИСТИТЬ ТЕКСТ ПАМЯТИ
+                <i class="fa-solid fa-trash-can"></i> ${tr('ОЧИСТИТЬ ТЕКСТ ПАМЯТИ', 'CLEAR MEMORY TEXT')}
             </button>
 
             <button class="bb-hub-btn" style="margin-top: 10px; border-color: transparent;" id="bb-hub-close-btn">
-                ЗАКРЫТЬ
+                ${tr('ЗАКРЫТЬ', 'CLOSE')}
             </button>
         </div>
     `;
@@ -266,9 +320,9 @@ function showControlCenter() {
         const viewer = document.getElementById('bb-memory-display');
         const currentData = getMapDataForCurrentChat();
         if (currentData && currentData.context) {
-            viewer.innerHTML = `<span>Слепок этого чата:</span><br/>${escapeHtml(currentData.context)}`;
+            viewer.innerHTML = `<span>${tr('Снимок этого чата:', 'Snapshot for this chat:')}</span><br/>${escapeHtml(currentData.context)}`;
         } else {
-            viewer.innerHTML = `<i>Память радара для этого чата чиста. ИИ не удерживает локацию.</i>`;
+            viewer.innerHTML = `<i>${tr('Память карты для этого чата пуста.', 'Map memory is empty for this chat.')}</i>`;
         }
         viewer.classList.toggle('active');
     };
@@ -286,15 +340,15 @@ function showControlCenter() {
         }
         
         // @ts-ignore
-        toastr.success('Память радара для этого чата успешно стерта!', 'BB Map Terminal');
+        toastr.success(tr('Память карты для этого чата очищена!', 'Map memory cleared for this chat!'), 'BB Map Terminal');
 
-        clearBtn.innerHTML = "🗑️ ПАМЯТЬ УСПЕШНО СТЕРТА!";
+        clearBtn.textContent = `🗑️ ${tr('ПАМЯТЬ ОЧИЩЕНА!', 'MEMORY CLEARED!')}`;
         clearBtn.style.background = "rgba(239, 68, 68, 0.4)";
         clearBtn.style.color = "#fff";
         
         const viewer = document.getElementById('bb-memory-display');
         if (viewer && viewer.classList.contains('active')) {
-            viewer.innerHTML = `<i>Память радара чиста.</i>`;
+            viewer.innerHTML = `<i>${tr('Память карты пуста.', 'Map memory is empty.')}</i>`;
         }
 
         setTimeout(() => {
@@ -355,7 +409,7 @@ function showRadarModal(data, isSavedMap = false) {
         let charsHtml = '';
         (zone.characters || []).forEach(char => {
             const safeName = escapeHtml(char.name);
-            const charInfo = `<b>👤 ${safeName}</b><br/>🎭 <b>Состояние:</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || '😐 Спокоен')}</span><br/>🤝 <b>Отношение:</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || 'Нейтральное')}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
+            const charInfo = `<b>👤 ${safeName}</b><br/>🎭 <b>${tr('Состояние:', 'Mood:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || tr('😐 Спокоен', '😐 Calm'))}</span><br/>🤝 <b>${tr('Отношение:', 'Attitude:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || tr('Нейтральное', 'Neutral'))}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
             const dataIndex = telemetryData.push(charInfo) - 1;
             
             const isUser = userName && safeName.toLowerCase().includes(userName.toLowerCase());
@@ -373,13 +427,13 @@ function showRadarModal(data, isSavedMap = false) {
 
         let reasonHtml = '';
         if (zone.threat_reason) {
-            reasonHtml = `<br/><br/>${threatIcon} <b>Обстановка:</b> <span style="color:#cbd5e1;">${escapeHtml(zone.threat_reason)}</span>`;
+            reasonHtml = `<br/><br/>${threatIcon} <b>${tr('Обстановка:', 'Conditions:')}</b> <span style="color:#cbd5e1;">${escapeHtml(zone.threat_reason)}</span>`;
         }
         
         let poiHtml = '';
         if (zone.poi && Array.isArray(zone.poi) && zone.poi.length > 0) {
             const spacer = reasonHtml ? '<br/>' : '<br/><br/>';
-            poiHtml = `${spacer}<b style="color:#5bc0be;">🔍 Объекты:</b><br/>` + zone.poi.map(p => `• <span style="color:#cbd5e1;">${escapeHtml(p)}</span>`).join('<br/>');
+            poiHtml = `${spacer}<b style="color:#5bc0be;">🔍 ${tr('Объекты:', 'Objects:')}</b><br/>` + zone.poi.map(p => `• <span style="color:#cbd5e1;">${escapeHtml(p)}</span>`).join('<br/>');
         }
 
         const zoneInfo = `<b>📍 ${safeZoneName}</b><br/><small style="color:#94a3b8;">${escapeHtml(zone.summary)}</small>${reasonHtml}${poiHtml}`;
@@ -400,13 +454,13 @@ function showRadarModal(data, isSavedMap = false) {
     }
 
     let saveBtnHtml = isSavedMap
-        ? `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn" style="opacity: 0.5; cursor: not-allowed; background: rgba(91, 192, 190, 0.1);" disabled>✅ УЖЕ В ПАМЯТИ</button>`
-        : `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn">💾 ЗАПОМНИТЬ ЛОКАЦИЮ</button>`;
+        ? `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn" style="opacity: 0.5; cursor: not-allowed; background: rgba(91, 192, 190, 0.1);" disabled>✅ ${tr('УЖЕ В ПАМЯТИ', 'ALREADY SAVED')}</button>`
+        : `<button class="bb-map-btn bb-btn-save" id="bb-map-save-btn">💾 ${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>`;
 
     overlay.innerHTML = `
         <div class="bb-map-modal">
             <div class="bb-map-header-container">
-                <div class="bb-map-title">📐 ${escapeHtml(data.schematic_name || 'НЕИЗВЕСТНАЯ ЛОКАЦИЯ')}</div>
+                <div class="bb-map-title">📐 ${escapeHtml(data.schematic_name || tr('НЕИЗВЕСТНАЯ ЛОКАЦИЯ', 'UNKNOWN LOCATION'))}</div>
                 ${tagsHtml ? `<div class="bb-header-tags">${tagsHtml}</div>` : ''}
             </div>
             
@@ -415,12 +469,12 @@ function showRadarModal(data, isSavedMap = false) {
             </div>
             
             <div class="bb-telemetry-screen" id="bb-telemetry">
-                <span style="opacity:0.5;">[ОЖИДАНИЕ ВВОДА] Наведите курсор или кликните для фиксации...</span>
+                <span style="opacity:0.5;">${tr('[ОЖИДАНИЕ] Наведите курсор или нажмите для выбора...', '[READY] Hover or click to select...')}</span>
             </div>
 
             <div class="bb-map-controls">
                 ${saveBtnHtml}
-                <button class="bb-map-btn" id="bb-map-back-btn">НАЗАД В ТЕРМИНАЛ</button>
+                <button class="bb-map-btn" id="bb-map-back-btn">${tr('НАЗАД В ТЕРМИНАЛ', 'BACK TO TERMINAL')}</button>
             </div>
         </div>
     `;
@@ -431,7 +485,7 @@ function showRadarModal(data, isSavedMap = false) {
     const telemetryScreen = overlay.querySelector('#bb-telemetry');
     let lockedNode = null;
     function updateTelemetry(content, isLocked = false) {
-        const lockMarker = isLocked ? `<div style="color:#5bc0be; font-size:10px; font-weight:bold; margin-bottom:5px; border-bottom:1px solid rgba(91, 192, 190, 0.3); padding-bottom:3px;">🔒 ЗАФИКСИРОВАНО (Кликните еще раз для сброса)</div>` : '';
+        const lockMarker = isLocked ? `<div style="color:#5bc0be; font-size:10px; font-weight:bold; margin-bottom:5px; border-bottom:1px solid rgba(91, 192, 190, 0.3); padding-bottom:3px;">🔒 ${tr('ЗАКРЕПЛЕНО (нажмите ещё раз для сброса)', 'PINNED (click again to clear)')}</div>` : '';
         telemetryScreen.innerHTML = lockMarker + content;
     }
 
@@ -442,7 +496,7 @@ function showRadarModal(data, isSavedMap = false) {
         });
         el.addEventListener('mouseleave', (e) => {
             e.stopPropagation();
-            if (!lockedNode) telemetryScreen.innerHTML = '<span style="opacity:0.5;">[ОЖИДАНИЕ ВВОДА] Наведите курсор или кликните для фиксации...</span>';
+            if (!lockedNode) telemetryScreen.innerHTML = `<span style="opacity:0.5;">${tr('[ОЖИДАНИЕ] Наведите курсор или нажмите для выбора...', '[READY] Hover or click to select...')}</span>`;
         });
         el.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -478,16 +532,16 @@ function showRadarModal(data, isSavedMap = false) {
             }
             
             // @ts-ignore
-            toastr.success('Данные карты успешно привязаны к этому чату!', 'BB Map Memory');
+            toastr.success(tr('Карта сохранена для этого чата!', 'Map saved for this chat!'), 'BB Map Memory');
 
-            saveBtn.innerHTML = "✅ ПАМЯТЬ УСПЕШНО СОХРАНЕНА!";
+            saveBtn.textContent = `✅ ${tr('КАРТА СОХРАНЕНА!', 'MAP SAVED!')}`;
             saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
             saveBtn.style.borderColor = "#4ade80";
             saveBtn.style.color = "#4ade80";
             saveBtn.style.transform = "scale(1.02)";
             
             setTimeout(() => {
-                saveBtn.innerHTML = "💾 ОБНОВИТЬ ЛОКАЦИЮ";
+                saveBtn.textContent = `💾 ${tr('ОБНОВИТЬ ЛОКАЦИЮ', 'UPDATE LOCATION')}`;
                 saveBtn.style.background = "";
                 saveBtn.style.borderColor = "";
                 saveBtn.style.color = "";
@@ -505,7 +559,7 @@ async function triggerMapScan(btnElement) {
     const chat = SillyTavern.getContext().chat;
     if (!chat || chat.length === 0) {
         // @ts-ignore
-        return toastr.warning("Чат пуст. Карта не сможет сформироваться!", "BB Map");
+        return toastr.warning(tr('Чат пуст. Карту пока нельзя создать.', 'The chat is empty. A map cannot be created yet.'), 'BB Map');
     }
 
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
@@ -527,7 +581,7 @@ async function triggerMapScan(btnElement) {
     }
 
     const oldHtml = btnElement.innerHTML;
-    btnElement.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; СКАНИРОВАНИЕ...';
+    btnElement.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; ${tr('СКАНИРОВАНИЕ...', 'SCANNING...')}`;
     btnElement.style.pointerEvents = "none"; 
 
     try {
@@ -543,133 +597,266 @@ async function triggerMapScan(btnElement) {
     } catch (err) {
         console.error(err);
         // @ts-ignore
-        toastr.error('Ошибка карты: ' + err.message, 'BB Map');
+        toastr.error(tr('Ошибка карты: ', 'Map error: ') + err.message, 'BB Map');
     } finally {
         btnElement.innerHTML = oldHtml;
         btnElement.style.pointerEvents = "auto";
     }
 }
 
-function setupExtensionSettings() {
-    if ($('#bb-map-settings-wrapper').length > 0) return;
-    const s = extension_settings[MODULE_NAME];
-    
-    const settingsHtml = `
-        <div id="bb-map-settings-wrapper" class="inline-drawer">
-            <div class="inline-drawer-toggle inline-drawer-header">
-                <b>🛰️ BB Interactive Map</b>
-                <div class="inline-drawer-icon fa-solid fa-chevron-down down"></div>
-            </div>
-            <div class="inline-drawer-content" style="padding: 10px;">
-                <label class="checkbox_label">
-                    <input type="checkbox" id="bb_map_enable_toggle" checked>
-                    <span>Показывать кнопку "Интерактивная карта" в меню Расширения</span>
-                </label>
-                <small style="display:block; margin-top:5px; margin-bottom: 10px; color:#94a3b8;">
-                    Эта настройка включает или отключает доступ к терминалу радара.
-                </small>
+function setupExtensionSettings(rebuild = false) {
+    const existing = document.getElementById('bb-map-settings-wrapper');
+    if (existing && !rebuild) return;
+    const target = document.querySelector('#extensions_settings2') || document.querySelector('#extensions_settings');
+    if (!target) return;
+    const openGroups = new Set([...existing?.querySelectorAll('details[open]') || []].map(el => el.dataset.section));
+    const wasOpen = !!existing && existing.querySelector(':scope > .inline-drawer-content')?.style.display !== 'none';
+    const panel = existing || document.createElement('div');
+    panel.id = 'bb-map-settings-wrapper';
+    panel.className = 'inline-drawer bb-map-settings';
 
-                <hr style="border-color: rgba(255,255,255,0.1); margin: 10px 0;">
-                
-                <span style="font-size: 13px; color: #cbd5e1; font-weight:bold;">⚡ Custom API (Для быстрой генерации карты):</span>
-                <label class="checkbox_label" style="margin-top: 5px;">
-                    <input type="checkbox" id="bb-map-cfg-usecustom" ${s.useCustomApi ? 'checked' : ''}>
-                    <span>Использовать свой API-ключ</span>
-                </label>
-                
-                <div id="bb-map-custom-api-block" style="display: ${s.useCustomApi ? 'flex' : 'none'}; flex-direction: column; gap: 8px; margin-top: 8px; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px;">
-                    <input type="text" id="bb-map-cfg-url" class="text_pole" placeholder="URL: http://example:1234/v1" value="${s.customApiUrl || ''}">
-                    <input type="password" id="bb-map-cfg-key" class="text_pole" placeholder="API Ключ" value="${s.customApiKey || ''}">
-                    <button id="bb-map-btn-connect" class="menu_button"><i class="fa-solid fa-plug"></i>&nbsp; Подключиться / Обновить</button>
-                    <select id="bb-map-cfg-model" class="text_pole" ${!s.customApiModel ? 'disabled' : ''}>
-                        <option value="${s.customApiModel || ''}">${s.customApiModel || 'Модели не загружены'}</option>
-                    </select>
-                </div>
+    const heading = document.createElement('div');
+    heading.className = 'inline-drawer-toggle inline-drawer-header';
+    heading.tabIndex = 0;
+    heading.setAttribute('role', 'button');
+    heading.innerHTML = '<b>🛰️ BB Interactive Map</b><div class="inline-drawer-icon fa-solid fa-chevron-down down"></div>';
+    heading.onkeydown = event => {
+        if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); heading.click(); }
+    };
+    const drawer = document.createElement('div');
+    drawer.className = 'inline-drawer-content';
+    drawer.style.display = wasOpen ? 'block' : 'none';
+    const body = document.createElement('div');
+    body.className = 'bb-map-settings-body';
+    drawer.append(body);
+    panel.replaceChildren(heading, drawer);
 
-                <hr style="border-color: rgba(255,255,255,0.1); margin: 10px 0;">
-                
-                <span style="font-size: 13px; color: #cbd5e1; font-weight:bold;">⚙️ Для пресетов:</span>
-                <label class="checkbox_label" style="margin-top: 5px;">
-                    <input type="checkbox" id="bb-map-cfg-usemacro" ${s.useMacro ? 'checked' : ''}>
-                    <span>Использовать макрос <code>{{bb_map}}</code> вместо авто-вставки</span>
-                </label>
-                <span style="font-size: 10px; color: #94a3b8; line-height: 1.2; margin-bottom: 5px; display:block;">* Отключит автоматическое внедрение карты в промпт. Впишите <code>{{bb_map}}</code> в ваш пресет вручную.</span>
-            </div>
-        </div>
-    `;
-    $('#extensions_settings').append(settingsHtml);
+    const intro = document.createElement('div');
+    intro.className = 'bb-map-settings-intro';
+    const title = document.createElement('strong');
+    title.textContent = tr('Карта и память сцены', 'Map and scene memory');
+    const description = document.createElement('p');
+    description.textContent = tr('Выберите язык и источник сканирования.', 'Choose the language and scan connection.');
+    intro.append(title, description);
+    body.append(intro);
 
-    $('#bb_map_enable_toggle').on('change', function() {
-        if ($(this).is(':checked')) {
-            $('#bb-map-menu-container').show();
-        } else {
-            $('#bb-map-menu-container').hide();
+    function group(label, icon, key) {
+        const section = document.createElement('details');
+        section.className = 'bb-map-settings-section';
+        section.dataset.section = key;
+        section.open = openGroups.has(key);
+        const summary = document.createElement('summary');
+        const glyph = document.createElement('span');
+        glyph.className = 'bb-map-section-icon';
+        glyph.textContent = icon;
+        const name = document.createElement('span');
+        name.textContent = label;
+        summary.append(glyph, name);
+        const content = document.createElement('div');
+        content.className = 'bb-map-section-body';
+        section.append(summary, content);
+        body.append(section);
+        return content;
+    }
+    function select(parent, label, value, options, change) {
+        const wrap = document.createElement('label');
+        wrap.className = 'bb-map-field';
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        const field = document.createElement('select');
+        field.className = 'text_pole';
+        for (const [optionValue, optionLabel] of options) {
+            const option = document.createElement('option');
+            option.value = optionValue;
+            option.textContent = optionLabel;
+            field.append(option);
         }
-    });
+        field.value = value;
+        field.onchange = () => change(field.value);
+        wrap.append(caption, field);
+        parent.append(wrap);
+        return field;
+    }
+    function input(parent, label, value, type, change) {
+        const wrap = document.createElement('label');
+        wrap.className = 'bb-map-field';
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        const field = document.createElement('input');
+        field.className = 'text_pole';
+        field.type = type;
+        field.value = value || '';
+        if (type === 'password') field.autocomplete = 'off';
+        field.onchange = () => change(field.value.trim());
+        wrap.append(caption, field);
+        parent.append(wrap);
+        return field;
+    }
+    function checkbox(parent, label, checked, change) {
+        const wrap = document.createElement('label');
+        wrap.className = 'checkbox_label';
+        const field = document.createElement('input');
+        field.type = 'checkbox';
+        field.checked = checked;
+        const caption = document.createElement('span');
+        caption.textContent = label;
+        field.onchange = () => change(field.checked);
+        wrap.append(field, caption);
+        parent.append(wrap);
+    }
+    function note(parent, message) {
+        const paragraph = document.createElement('p');
+        paragraph.className = 'bb-map-settings-note';
+        paragraph.textContent = message;
+        parent.append(paragraph);
+        return paragraph;
+    }
 
-    $('#bb-map-cfg-usecustom').on('change', function() {
-        const isChecked = $(this).is(':checked');
-        extension_settings[MODULE_NAME].useCustomApi = isChecked;
-        if (isChecked) $('#bb-map-custom-api-block').slideDown(200);
-        else $('#bb-map-custom-api-block').slideUp(200);
+    const general = group(tr('Интерфейс', 'Interface'), '⚙', 'general');
+    select(general, tr('Язык интерфейса', 'Interface language'), settings.uiLanguage,
+        [['auto', tr('Как в браузере', 'Browser language')], ['ru', 'Русский'], ['en', 'English']], value => {
+            settings.uiLanguage = value;
+            saveSettingsDebounced();
+            document.querySelector('#bb-map-menu-item span')?.replaceChildren(document.createTextNode(tr('Интерактивная карта', 'Interactive Map')));
+            setupExtensionSettings(true);
+        });
+    checkbox(general, tr('Показывать кнопку в меню расширений', 'Show button in Extensions menu'), settings.showMenuButton, checked => {
+        settings.showMenuButton = checked;
+        document.getElementById('bb-map-menu-container')?.toggleAttribute('hidden', !checked);
         saveSettingsDebounced();
     });
 
-    $('#bb-map-cfg-url, #bb-map-cfg-key').on('change input', function() {
-        extension_settings[MODULE_NAME].customApiUrl = $('#bb-map-cfg-url').val();
-        extension_settings[MODULE_NAME].customApiKey = $('#bb-map-cfg-key').val();
+    const connection = group(tr('Источник сканирования', 'Scan connection'), '⚡', 'connection');
+    const profileBlock = document.createElement('div');
+    profileBlock.className = 'bb-map-provider-block';
+    const customBlock = document.createElement('div');
+    customBlock.className = 'bb-map-provider-block';
+    const source = select(connection, tr('Источник', 'Source'), settings.generationSource,
+        [['main', tr('Текущее подключение SillyTavern', 'Current SillyTavern connection')],
+            ['profile', tr('Профиль подключения SillyTavern', 'SillyTavern connection profile')],
+            ['custom', 'Custom API']], value => {
+            settings.generationSource = value;
+            settings.useCustomApi = value === 'custom';
+            profileBlock.hidden = value !== 'profile';
+            customBlock.hidden = value !== 'custom';
+            saveSettingsDebounced();
+            if (value === 'profile') void refreshProfiles();
+        });
+    connection.append(profileBlock, customBlock);
+    profileBlock.hidden = source.value !== 'profile';
+    customBlock.hidden = source.value !== 'custom';
+    const profiles = select(profileBlock, tr('Профиль подключения', 'Connection profile'), settings.connectionProfileId, [], value => {
+        settings.connectionProfileId = value;
         saveSettingsDebounced();
     });
-    
-    $(document).on('change', '#bb-map-cfg-model', function() {
-         extension_settings[MODULE_NAME].customApiModel = $(this).val();
-         saveSettingsDebounced();
-    });
-
-    // ОБРАБОТЧИК МАКРОСА
-    $('#bb-map-cfg-usemacro').on('change', function() {
-        extension_settings[MODULE_NAME].useMacro = $(this).is(':checked');
-        saveSettingsDebounced();
-        injectCurrentMapContext(); 
-    });
-
-    $('#bb-map-btn-connect').on('click', async function() {
-        const btn = $(this);
-        // @ts-ignore
-        const url = $('#bb-map-cfg-url').val().replace(/\/$/, '');
-        const key = $('#bb-map-cfg-key').val();
-        btn.html('<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; Подключение...');
-
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'menu_button';
+    refresh.textContent = tr('↻ Обновить профили', '↻ Refresh profiles');
+    profileBlock.append(refresh);
+    const profileNote = note(profileBlock, '');
+    async function refreshProfiles() {
+        refresh.disabled = true;
+        profiles.disabled = true;
         try {
-            const response = await fetch(url + '/models', {
-                method: 'GET', headers: { 'Authorization': `Bearer ${key}` }
-            });
-            if (!response.ok) throw new Error(`Ошибка ${response.status}`);
-            const data = await response.json();
-            
-            if (data && data.data && Array.isArray(data.data)) {
-                const select = $('#bb-map-cfg-model');
-                select.empty();
-                data.data.forEach(m => select.append(`<option value="${m.id}">${m.id}</option>`));
-                select.prop('disabled', false);
-                
-                if (extension_settings[MODULE_NAME].customApiModel && select.find(`option[value="${extension_settings[MODULE_NAME].customApiModel}"]`).length) {
-                    select.val(extension_settings[MODULE_NAME].customApiModel);
-                } else {
-                    extension_settings[MODULE_NAME].customApiModel = select.val();
-                }
-                // @ts-ignore
-                toastr.success("Модели загружены!", "BB Map");
-                saveSettingsDebounced();
-            } else throw new Error("Нет моделей.");
-        } catch (e) {
-            console.error(e);
-            // @ts-ignore
-            toastr.error(`Ошибка: ${e.message}`, "BB Map");
+            const available = getProfileService().getSupportedProfiles();
+            if (!profiles.isConnected) return;
+            profiles.replaceChildren();
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = tr('Выберите профиль', 'Select a profile');
+            profiles.append(placeholder);
+            for (const profile of available) {
+                const option = document.createElement('option');
+                option.value = profile.id;
+                option.textContent = profile.name || profile.id;
+                profiles.append(option);
+            }
+            if (settings.connectionProfileId && !available.some(profile => profile.id === settings.connectionProfileId)) {
+                const missing = document.createElement('option');
+                missing.value = settings.connectionProfileId;
+                missing.textContent = tr('Сохранённый профиль недоступен', 'Saved profile unavailable');
+                profiles.append(missing);
+            }
+            profiles.value = settings.connectionProfileId;
+            profiles.disabled = available.length === 0;
+            profileNote.textContent = available.length
+                ? tr('Используются модель и пресет профиля. Подключение чата не меняется.', 'Uses the profile model and preset. The chat connection stays unchanged.')
+                : tr('Нет доступных текстовых профилей.', 'No supported text profiles are available.');
+        } catch {
+            profileNote.textContent = tr('Менеджер подключений недоступен.', 'Connection Manager is unavailable.');
         } finally {
-            btn.html('<i class="fa-solid fa-plug"></i>&nbsp; Подключиться / Обновить');
+            refresh.disabled = false;
         }
+    }
+    refresh.onclick = () => { void refreshProfiles(); };
+    if (source.value === 'profile') void refreshProfiles();
+
+    const url = input(customBlock, 'URL', settings.customApiUrl, 'url', value => {
+        settings.customApiUrl = value;
+        saveSettingsDebounced();
     });
+    const key = input(customBlock, tr('API-ключ', 'API key'), settings.customApiKey, 'password', value => {
+        settings.customApiKey = value;
+        saveSettingsDebounced();
+    });
+    const model = input(customBlock, tr('Модель', 'Model'), settings.customApiModel, 'text', value => {
+        settings.customApiModel = value;
+        saveSettingsDebounced();
+    });
+    const modelList = document.createElement('datalist');
+    modelList.id = 'bb-map-model-list';
+    model.setAttribute('list', modelList.id);
+    customBlock.append(modelList);
+    const connect = document.createElement('button');
+    connect.type = 'button';
+    connect.className = 'menu_button';
+    connect.textContent = tr('Подключиться / Обновить модели', 'Connect / Refresh models');
+    customBlock.append(connect);
+    connect.onclick = async () => {
+        if (connect.disabled) return;
+        settings.customApiUrl = url.value.trim();
+        settings.customApiKey = key.value.trim();
+        settings.customApiModel = model.value.trim();
+        saveSettingsDebounced();
+        connect.disabled = true;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        try {
+            if (!settings.customApiUrl) throw new Error(tr('Укажите URL.', 'Enter a URL.'));
+            const response = await fetch(settings.customApiUrl.replace(/\/+$/, '') + '/models', {
+                headers: { Authorization: `Bearer ${settings.customApiKey || ''}` }, signal: controller.signal,
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (!Array.isArray(data?.data)) throw new Error(tr('Список моделей недоступен.', 'Model list is unavailable.'));
+            modelList.replaceChildren();
+            for (const entry of data.data) {
+                if (typeof entry?.id !== 'string') continue;
+                const option = document.createElement('option');
+                option.value = entry.id;
+                modelList.append(option);
+            }
+            toastr.success(tr('Модели загружены!', 'Models loaded!'), 'BB Map');
+        } catch (error) {
+            const message = error?.name === 'AbortError' ? tr('Время ожидания истекло.', 'Request timed out.') : error.message;
+            toastr.error(tr('Ошибка подключения: ', 'Connection error: ') + message, 'BB Map');
+        } finally {
+            clearTimeout(timer);
+            connect.disabled = false;
+        }
+    };
+    note(customBlock, tr('API-ключ сохраняется в настройках SillyTavern.', 'The API key is stored in SillyTavern settings.'));
+
+    const memory = group(tr('Память и пресеты', 'Memory and presets'), '◈', 'memory');
+    checkbox(memory, tr('Использовать макрос {{bb_map}} вместо авто-вставки', 'Use {{bb_map}} macro instead of automatic injection'), settings.useMacro, checked => {
+        settings.useMacro = checked;
+        saveSettingsDebounced();
+        injectCurrentMapContext();
+    });
+    note(memory, tr('Добавьте {{bb_map}} в свой пресет вручную.', 'Add {{bb_map}} to your preset manually.'));
+
+    if (!existing) target.append(panel);
 }
 
 function injectMapButtonToWandMenu() {
@@ -678,13 +865,14 @@ function injectMapButtonToWandMenu() {
         <div id="bb-map-menu-container" class="extension_container interactable" tabindex="0">
             <div id="bb-map-menu-item" class="list-group-item flex-container flexGap5 interactable" tabindex="0">
                 <div class="fa-fw fa-solid fa-satellite-dish extensionsMenuExtensionButton" style="color: #5bc0be;"></div>
-                <span style="color: #e2e8f0;">Интерактивная карта</span>
+                <span style="color: #e2e8f0;">${tr('Интерактивная карта', 'Interactive Map')}</span>
             </div>
         </div>
     `);
     const extensionsMenu = $("#extensionsMenu");
     if (extensionsMenu.length > 0) {
         extensionsMenu.append(menuItem);
+        menuItem[0].toggleAttribute('hidden', !settings.showMenuButton);
         $(document).on("click", "#bb-map-menu-item", function(e) {
             e.preventDefault();
             showControlCenter();
