@@ -219,37 +219,6 @@
 .bb-btn-save { border-color: rgba(91, 192, 190, 0.5); color: #5bc0be; }
 .bb-btn-save:hover { background: rgba(91, 192, 190, 0.2); border-color: #5bc0be; box-shadow: 0 0 15px rgba(91, 192, 190, 0.4); }
 
-.bb-btn-clear { border-color: rgba(239, 68, 68, 0.5); color: #ef4444; }
-.bb-btn-clear:hover { background: rgba(239, 68, 68, 0.2); border-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.4); }
-/* === ЦЕНТР УПРАВЛЕНИЯ (ХАБ) === */
-.bb-hub-modal {
-    background: rgba(20, 20, 25, 0.95); backdrop-filter: blur(20px);
-    border: 1px solid rgba(91, 192, 190, 0.3);
-    border-radius: 12px; padding: 20px; width: 400px; max-width: 90vw;
-    box-shadow: 0 20px 50px rgba(0,0,0,0.8), inset 0 0 0 1px rgba(255,255,255,0.05);
-    display: flex; flex-direction: column; gap: 15px;
-    animation: bootUpModal 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}
-
-.bb-hub-btn {
-    background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.2); 
-    color: #e2e8f0; padding: 12px; border-radius: 8px; cursor: pointer;
-    font-family: inherit; font-weight: 600; text-transform: uppercase; letter-spacing: 1px;
-    display: flex; align-items: center; justify-content: center; gap: 10px;
-    transition: all 0.2s;
-}
-
-.bb-hub-btn:hover { background: rgba(91, 192, 190, 0.15); border-color: #5bc0be; color: #fff; transform: translateY(-2px); }
-.bb-hub-btn-danger:hover { background: rgba(239, 68, 68, 0.15); border-color: #ef4444; }
-
-.bb-memory-viewer {
-    background: rgba(0, 0, 0, 0.5); border: 1px dashed rgba(255, 255, 255, 0.2);
-    border-radius: 6px; padding: 10px; font-size: 12px; color: #94a3b8;
-    max-height: 150px; overflow-y: auto; display: none; line-height: 1.4;
-}
-.bb-memory-viewer.active { display: block; animation: popInTags 0.3s ease forwards; }
-.bb-memory-viewer span { color: #5bc0be; font-weight: bold; }
-
 /* Settings use the compact section layout of BB Enhance Gen with the map palette. */
 .bb-map-settings {
     --bb-map-accent: #5bc0be;
@@ -276,6 +245,7 @@
 .bb-map-settings-section[open] > summary::after { transform: rotate(90deg); }
 .bb-map-section-icon { width: 24px; text-align: center; color: var(--bb-map-accent); }
 .bb-map-section-body { display: grid; gap: 10px; padding: 0 12px 12px; }
+.bb-map-settings-section[data-section="map"] .bb-map-section-body { padding-top: 8px; }
 .bb-map-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; font-size: 0.85rem; }
 .bb-map-field > span { opacity: 0.85; }
 .bb-map-settings .text_pole { width: 100%; min-width: 0; box-sizing: border-box; margin: 0; border-radius: 6px; }
@@ -283,7 +253,7 @@
 .bb-map-settings .checkbox_label input { flex: 0 0 auto; accent-color: var(--bb-map-accent); }
 .bb-map-settings .checkbox_label span { min-width: 0; overflow-wrap: anywhere; }
 .bb-map-provider-block { display: grid; gap: 10px; padding-top: 4px; }
-.bb-map-settings [hidden], #bb-map-menu-container[hidden] { display: none !important; }
+.bb-map-settings [hidden] { display: none !important; }
 .bb-map-settings .menu_button {
     display: flex; justify-content: center; align-items: center; width: 100%; margin: 0;
     min-width: 0; white-space: normal; padding: 8px 10px;
@@ -291,6 +261,14 @@
     background: rgba(91, 192, 190, 0.08); color: inherit;
 }
 .bb-map-settings .menu_button:hover { background: rgba(91, 192, 190, 0.18); border-color: var(--bb-map-accent); }
+.bb-map-settings .bb-map-danger-action { border-color: rgba(239, 68, 68, 0.35); color: #fca5a5; }
+.bb-map-settings .bb-map-danger-action:hover { border-color: #ef4444; background: rgba(239, 68, 68, 0.15); }
+.bb-map-memory-text {
+    margin: 0; padding: 10px; max-height: 180px; overflow: auto;
+    white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;
+    border: 1px solid var(--bb-map-border); border-radius: 6px;
+    background: rgba(0, 0, 0, 0.25);
+}
 .bb-map-settings summary:focus-visible, .bb-map-settings :focus-visible { outline: 2px solid var(--bb-map-accent); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) {
     .bb-map-settings-section > summary::after { transition: none; }

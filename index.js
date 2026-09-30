@@ -22,9 +22,9 @@ if (!['main', 'profile', 'custom'].includes(settings.generationSource)) {
 }
 settings.uiLanguage ??= 'auto';
 settings.connectionProfileId ??= '';
-settings.showMenuButton ??= true;
 settings.showWidget ??= true;
 settings.widgetCollapsed ??= true;
+if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
 
@@ -213,165 +213,6 @@ function injectCurrentMapContext() {
     }
 }
 
-function showControlCenter() {
-    const chatForHub = SillyTavern.getContext().chat;
-    const old = document.getElementById('bb-map-overlay');
-    if (old) old.remove();
-
-    const overlay = document.createElement('div');
-    overlay.id = 'bb-map-overlay';
-    overlay.className = 'bb-map-overlay';
-
-    const mapData = getMapDataForCurrentChat();
-    const statusHtml = (mapData && mapData.context) 
-        ? `<div style="color: #4ade80; font-size: 11px; font-weight: bold; margin-top: 5px; animation: dangerPulse 2s infinite;">🟢 ${tr('ПАМЯТЬ ЛОКАЦИИ АКТИВНА', 'LOCATION MEMORY ACTIVE')}</div>`
-        : `<div style="color: #94a3b8; font-size: 11px; font-weight: bold; margin-top: 5px;">⚪ ${tr('ПАМЯТЬ ЛОКАЦИИ ПУСТА', 'LOCATION MEMORY EMPTY')}</div>`;
-
-    let openMapBtnHtml = '';
-    if (mapData && mapData.raw) {
-        openMapBtnHtml = `
-            <button class="bb-hub-btn" id="bb-hub-open-btn" style="border-color: rgba(91, 192, 190, 0.5); color: #5bc0be;">
-                <i class="fa-solid fa-map"></i> ${tr('ОТКРЫТЬ СОХРАНЁННУЮ КАРТУ', 'OPEN SAVED MAP')}
-            </button>
-        `;
-    }
-    const restoreBtnHtml = mapData?.previous?.raw
-        ? `<button class="bb-hub-btn" id="bb-hub-restore-btn">↶ ${tr('ВОССТАНОВИТЬ ПРЕДЫДУЩУЮ КАРТУ', 'RESTORE PREVIOUS MAP')}</button>`
-        : '';
-
-    const scaleSelectorHtml = `
-        <style>
-            .bb-scale-toggle { display: flex; background: #070709; border: 1px solid #1f1f22; border-radius: 8px; overflow: hidden; margin-bottom: -5px; }
-            .bb-scale-btn { flex: 1; padding: 10px 0; text-align: center; font-size: 11px; font-weight: bold; color: #64748b; cursor: pointer; transition: all 0.2s; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; justify-content: center; gap: 6px; }
-            .bb-scale-btn.active { background: rgba(91, 192, 190, 0.15); color: #5bc0be; border-bottom: 2px solid #5bc0be; }
-            .bb-scale-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.05); color: #e2e8f0; }
-        </style>
-        <div class="bb-scale-toggle" id="bb-map-scale-toggle" data-mode="local">
-            <div class="bb-scale-btn active" data-val="local"><i class="fa-solid fa-crosshairs"></i> ${tr('Комната', 'Room')}</div>
-            <div class="bb-scale-btn" data-val="global"><i class="fa-solid fa-globe"></i> ${tr('Здание', 'Building')}</div>
-        </div>
-    `;
-
-    overlay.innerHTML = `
-        <div class="bb-hub-modal">
-            <div class="bb-map-header-container" style="border-bottom: none; padding-bottom: 0;">
-                <div class="bb-map-title">🛰️ ${tr('ТЕРМИНАЛ КАРТЫ', 'MAP TERMINAL')}</div>
-                ${statusHtml}
-            </div>
-            
-            ${openMapBtnHtml}
-            ${restoreBtnHtml}
-            ${scaleSelectorHtml}
-
-            <button class="bb-hub-btn" id="bb-hub-scan-btn">
-                <i class="fa-solid fa-satellite-dish"></i> ${tr('ЗАПУСТИТЬ НОВЫЙ СКАН', 'START NEW SCAN')}
-            </button>
-            
-            <button class="bb-hub-btn" id="bb-hub-view-btn">
-                <i class="fa-solid fa-eye"></i> ${tr('ПОСМОТРЕТЬ ТЕКСТ ПАМЯТИ', 'VIEW MEMORY TEXT')}
-            </button>
-            
-            <div class="bb-memory-viewer" id="bb-memory-display"></div>
-
-            <button class="bb-hub-btn bb-hub-btn-danger" id="bb-hub-clear-btn">
-                <i class="fa-solid fa-trash-can"></i> ${tr('ОЧИСТИТЬ ТЕКСТ ПАМЯТИ', 'CLEAR MEMORY TEXT')}
-            </button>
-
-            <button class="bb-hub-btn" style="margin-top: 10px; border-color: transparent;" id="bb-hub-close-btn">
-                ${tr('ЗАКРЫТЬ', 'CLOSE')}
-            </button>
-        </div>
-    `;
-
-    document.body.appendChild(overlay);
-    requestAnimationFrame(() => overlay.style.opacity = '1');
-
-    const toggleBtns = overlay.querySelectorAll('.bb-scale-btn');
-    toggleBtns.forEach(btn => {
-        btn.addEventListener('click', function() {
-            toggleBtns.forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            document.getElementById('bb-map-scale-toggle').setAttribute('data-mode', this.getAttribute('data-val'));
-        });
-    });
-
-    if (mapData && mapData.raw) {
-        document.getElementById('bb-hub-open-btn').onclick = function() {
-            showRadarModal(mapData.raw, true);
-        };
-    }
-
-    const restoreBtn = document.getElementById('bb-hub-restore-btn');
-    if (restoreBtn) restoreBtn.onclick = () => {
-        if (SillyTavern.getContext().chat !== chatForHub) {
-            showControlCenter();
-            return;
-        }
-        const restored = restorePreviousMap(getMapDataForCurrentChat());
-        if (!restored || !chat_metadata) return;
-        chat_metadata['bb_map_data'] = restored;
-        saveChatDebounced();
-        injectCurrentMapContext();
-        renderMapWidget();
-        showControlCenter();
-        toastr.success(tr('Предыдущая карта восстановлена.', 'Previous map restored.'), 'BB Map');
-    };
-
-    document.getElementById('bb-hub-scan-btn').onclick = function() {
-        triggerMapScan(this);
-    };
-
-    document.getElementById('bb-hub-view-btn').onclick = function() {
-        const viewer = document.getElementById('bb-memory-display');
-        const currentData = getMapDataForCurrentChat();
-        if (currentData && currentData.context) {
-            viewer.innerHTML = `<span>${tr('Снимок этого чата:', 'Snapshot for this chat:')}</span><br/>${escapeHtml(currentData.context)}`;
-        } else {
-            viewer.innerHTML = `<i>${tr('Память карты для этого чата пуста.', 'Map memory is empty for this chat.')}</i>`;
-        }
-        viewer.classList.toggle('active');
-    };
-
-    const clearBtn = document.getElementById('bb-hub-clear-btn');
-    clearBtn.onclick = function() {
-        if (SillyTavern.getContext().chat !== chatForHub) {
-            showControlCenter();
-            return;
-        }
-        try {
-            if (chat_metadata) {
-                delete chat_metadata['bb_map_data']; 
-                saveChatDebounced(); 
-                injectCurrentMapContext(); 
-                renderMapWidget();
-            }
-        } catch (e) {
-            console.error("[BB Map] Ошибка очистки API:", e);
-        }
-        
-        // @ts-ignore
-        toastr.success(tr('Память карты для этого чата очищена!', 'Map memory cleared for this chat!'), 'BB Map Terminal');
-
-        clearBtn.textContent = `🗑️ ${tr('ПАМЯТЬ ОЧИЩЕНА!', 'MEMORY CLEARED!')}`;
-        clearBtn.style.background = "rgba(239, 68, 68, 0.4)";
-        clearBtn.style.color = "#fff";
-        
-        const viewer = document.getElementById('bb-memory-display');
-        if (viewer && viewer.classList.contains('active')) {
-            viewer.innerHTML = `<i>${tr('Память карты пуста.', 'Map memory is empty.')}</i>`;
-        }
-
-        setTimeout(() => {
-            showControlCenter(); 
-        }, 1500);
-    };
-
-    document.getElementById('bb-hub-close-btn').onclick = () => {
-        overlay.style.opacity = '0';
-        setTimeout(() => overlay.remove(), 300);
-    };
-}
-
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext().chat) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
@@ -488,7 +329,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
 
             <div class="bb-map-controls">
                 ${saveBtnHtml}
-                <button class="bb-map-btn" id="bb-map-back-btn">${tr('НАЗАД В ТЕРМИНАЛ', 'BACK TO TERMINAL')}</button>
+                <button class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button>
             </div>
         </div>
     `;
@@ -539,6 +380,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 saveChatDebounced();
                 injectCurrentMapContext();
                 renderMapWidget();
+                setupExtensionSettings(true);
             } catch (e) {
                 toastr.error(e.message, 'BB Map Memory');
                 return;
@@ -558,11 +400,13 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     }
 
     document.getElementById('bb-map-back-btn').onclick = () => {
-        showControlCenter();
+        overlay.style.opacity = '0';
+        setTimeout(() => overlay.remove(), 300);
     };
 }
 
-async function triggerMapScan(btnElement) {
+async function triggerMapScan(btnElement, scaleMode = 'local') {
+    if (btnElement.disabled) return;
     const chat = SillyTavern.getContext().chat;
     if (!chat || chat.length === 0) {
         // @ts-ignore
@@ -570,9 +414,6 @@ async function triggerMapScan(btnElement) {
     }
 
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
-    
-    const scaleToggle = document.getElementById('bb-map-scale-toggle');
-    const scaleMode = scaleToggle ? scaleToggle.getAttribute('data-mode') : 'local';
     
     let scaleInstruction = "";
     if (scaleMode === 'global') {
@@ -589,7 +430,7 @@ async function triggerMapScan(btnElement) {
 
     const oldHtml = btnElement.innerHTML;
     btnElement.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; ${tr('СКАНИРОВАНИЕ...', 'SCANNING...')}`;
-    btnElement.style.pointerEvents = "none"; 
+    btnElement.disabled = true;
 
     try {
         let prompt = MAP_PROMPT
@@ -613,7 +454,7 @@ async function triggerMapScan(btnElement) {
         toastr.error(tr('Ошибка карты: ', 'Map error: ') + message, 'BB Map');
     } finally {
         btnElement.innerHTML = oldHtml;
-        btnElement.style.pointerEvents = "auto";
+        btnElement.disabled = false;
     }
 }
 
@@ -649,7 +490,7 @@ function setupExtensionSettings(rebuild = false) {
     const title = document.createElement('strong');
     title.textContent = tr('Карта и память сцены', 'Map and scene memory');
     const description = document.createElement('p');
-    description.textContent = tr('Выберите язык и источник сканирования.', 'Choose the language and scan connection.');
+    description.textContent = tr('Сканирование и управление памятью находятся в настройках.', 'Scan and manage map memory here.');
     intro.append(title, description);
     body.append(intro);
 
@@ -724,26 +565,80 @@ function setupExtensionSettings(rebuild = false) {
         parent.append(paragraph);
         return paragraph;
     }
+    function action(parent, label, handler, className = '') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `menu_button ${className}`.trim();
+        button.textContent = label;
+        button.onclick = handler;
+        parent.append(button);
+        return button;
+    }
 
     const general = group(tr('Интерфейс', 'Interface'), '⚙', 'general');
     select(general, tr('Язык интерфейса', 'Interface language'), settings.uiLanguage,
         [['auto', tr('Как в браузере', 'Browser language')], ['ru', 'Русский'], ['en', 'English']], value => {
             settings.uiLanguage = value;
             saveSettingsDebounced();
-            document.querySelector('#bb-map-menu-item span')?.replaceChildren(document.createTextNode(tr('Интерактивная карта', 'Interactive Map')));
             setupExtensionSettings(true);
             renderMapWidget();
         });
-    checkbox(general, tr('Показывать кнопку в меню расширений', 'Show button in Extensions menu'), settings.showMenuButton, checked => {
-        settings.showMenuButton = checked;
-        document.getElementById('bb-map-menu-container')?.toggleAttribute('hidden', !checked);
-        saveSettingsDebounced();
-    });
     checkbox(general, tr('Показывать виджет сохранённой карты', 'Show saved map widget'), settings.showWidget, checked => {
         settings.showWidget = checked;
         saveSettingsDebounced();
         renderMapWidget();
     });
+
+    // Keep map management in settings; the saved-map widget is the only chat control.
+    const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');
+    const chatForTools = SillyTavern.getContext().chat;
+    const savedMap = getMapDataForCurrentChat();
+    note(mapTools, savedMap?.context
+        ? tr('Память локации активна.', 'Location memory is active.')
+        : tr('Память локации пуста.', 'Location memory is empty.'));
+    select(mapTools, tr('Масштаб нового скана', 'New scan scale'), settings.scanScale,
+        [['local', tr('Комната', 'Room')], ['global', tr('Здание', 'Building')]], value => {
+            settings.scanScale = value;
+            saveSettingsDebounced();
+        });
+    const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {
+        void triggerMapScan(scan, settings.scanScale);
+    });
+    if (savedMap?.raw) action(mapTools, tr('Открыть сохранённую карту', 'Open saved map'), () => {
+        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        showRadarModal(getMapDataForCurrentChat().raw, true);
+    });
+    if (savedMap?.previous?.raw) action(mapTools, tr('Восстановить предыдущую карту', 'Restore previous map'), () => {
+        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        const restored = restorePreviousMap(getMapDataForCurrentChat());
+        if (!restored || !chat_metadata) return;
+        chat_metadata.bb_map_data = restored;
+        saveChatDebounced();
+        injectCurrentMapContext();
+        renderMapWidget();
+        setupExtensionSettings(true);
+        toastr.success(tr('Предыдущая карта восстановлена.', 'Previous map restored.'), 'BB Map');
+    });
+    const view = action(mapTools, tr('Посмотреть текст памяти', 'View memory text'), () => {
+        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        memoryText.textContent = getMapDataForCurrentChat()?.context || tr('Память карты пуста.', 'Map memory is empty.');
+        memoryText.hidden = !memoryText.hidden;
+        view.setAttribute('aria-expanded', String(!memoryText.hidden));
+    });
+    view.setAttribute('aria-expanded', 'false');
+    const memoryText = document.createElement('pre');
+    memoryText.className = 'bb-map-memory-text';
+    memoryText.hidden = true;
+    mapTools.append(memoryText);
+    if (savedMap) action(mapTools, tr('Очистить текст памяти', 'Clear memory text'), () => {
+        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        delete chat_metadata.bb_map_data;
+        saveChatDebounced();
+        injectCurrentMapContext();
+        renderMapWidget();
+        setupExtensionSettings(true);
+        toastr.success(tr('Память карты для этого чата очищена!', 'Map memory cleared for this chat!'), 'BB Map');
+    }, 'bb-map-danger-action');
 
     const connection = group(tr('Источник сканирования', 'Scan connection'), '⚡', 'connection');
     const profileBlock = document.createElement('div');
@@ -971,29 +866,6 @@ function renderMapWidget() {
     });
 }
 
-function injectMapButtonToWandMenu() {
-    if ($("#bb-map-menu-item").length > 0) return;
-    const menuItem = $(`
-        <div id="bb-map-menu-container" class="extension_container interactable" tabindex="0">
-            <div id="bb-map-menu-item" class="list-group-item flex-container flexGap5 interactable" tabindex="0">
-                <div class="fa-fw fa-solid fa-satellite-dish extensionsMenuExtensionButton" style="color: #5bc0be;"></div>
-                <span style="color: #e2e8f0;">${tr('Интерактивная карта', 'Interactive Map')}</span>
-            </div>
-        </div>
-    `);
-    const extensionsMenu = $("#extensionsMenu");
-    if (extensionsMenu.length > 0) {
-        extensionsMenu.append(menuItem);
-        menuItem[0].toggleAttribute('hidden', !settings.showMenuButton);
-        $(document).on("click", "#bb-map-menu-item", function(e) {
-            e.preventDefault();
-            showControlCenter();
-        });
-    } else {
-        setTimeout(injectMapButtonToWandMenu, 1000);
-    }
-}
-
 jQuery(async () => {
     try {
         const { eventSource, event_types } = SillyTavern.getContext();
@@ -1009,15 +881,16 @@ jQuery(async () => {
         }
 
         eventSource.on(event_types.APP_READY, () => {
-            injectMapButtonToWandMenu();
             setupExtensionSettings();
             injectCurrentMapContext(); 
             renderMapWidget();
         });
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
+            document.getElementById('bb-map-overlay')?.remove();
             injectCurrentMapContext();
             renderMapWidget();
+            setupExtensionSettings(true);
         });
         window.addEventListener('resize', () => {
             if (document.getElementById('bb-map-widget')) renderMapWidget();
@@ -1037,7 +910,6 @@ jQuery(async () => {
         });
 
         setTimeout(() => {
-            injectMapButtonToWandMenu();
             setupExtensionSettings();
             renderMapWidget();
         }, 2000);
