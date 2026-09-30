@@ -295,3 +295,60 @@
 @media (prefers-reduced-motion: reduce) {
     .bb-map-settings-section > summary::after { transition: none; }
 }
+
+/* Compact map terminal for the current chat. */
+.bb-map-widget {
+    position: fixed; right: 16px; bottom: 78px; z-index: 9998;
+    width: min(280px, calc(100vw - 16px)); box-sizing: border-box;
+    color: #e2e8f0; background: rgba(15, 20, 25, 0.96);
+    border: 1px solid rgba(91, 192, 190, 0.55); border-radius: 11px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(255,255,255,0.04);
+    font: 12px/1.4 'Segoe UI', Tahoma, sans-serif;
+    overflow: hidden; animation: bbWidgetEnter 0.22s ease-out;
+}
+@keyframes bbWidgetEnter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+.bb-map-widget-header {
+    display: flex; align-items: center; gap: 9px; min-height: 40px; padding: 4px 6px 4px 11px;
+    box-sizing: border-box; cursor: grab; touch-action: none; user-select: none;
+}
+.bb-map-widget-header:active { cursor: grabbing; }
+.bb-map-widget-signal {
+    width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%;
+    background: #5bc0be; box-shadow: 0 0 9px rgba(91, 192, 190, 0.7);
+}
+.bb-map-widget-danger .bb-map-widget-signal { background: #ef4444; box-shadow: 0 0 9px rgba(239, 68, 68, 0.7); }
+.bb-map-widget-tension .bb-map-widget-signal { background: #f59e0b; box-shadow: 0 0 9px rgba(245, 158, 11, 0.7); }
+.bb-map-widget-heading { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.bb-map-widget-toggle, .bb-map-widget-open {
+    color: #5bc0be; background: rgba(91, 192, 190, 0.08); border: 1px solid rgba(91, 192, 190, 0.28);
+    border-radius: 6px; cursor: pointer; font: inherit;
+}
+.bb-map-widget-toggle { width: 30px; height: 28px; flex: 0 0 30px; font-size: 18px; line-height: 1; }
+.bb-map-widget-content { display: grid; gap: 10px; padding: 0 11px 11px; }
+.bb-map-widget-content[hidden] { display: none; }
+.bb-map-widget-meta { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 9px; color: #94a3b8; }
+.bb-map-widget-meta > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-map-widget-threat { flex: 0 0 auto; color: #4ade80; }
+.bb-map-widget-danger .bb-map-widget-threat { color: #f87171; }
+.bb-map-widget-tension .bb-map-widget-threat { color: #fbbf24; }
+.bb-map-widget-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.bb-map-widget-cell {
+    display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 37px;
+    padding: 3px; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 4px; color: #cbd5e1; background: rgba(255,255,255,0.04);
+    font-size: 10px; text-align: center; overflow: hidden; overflow-wrap: anywhere;
+}
+.bb-map-widget-cell.is-empty { color: #52606c; border-style: dashed; }
+.bb-map-widget-cell.is-center { border-color: #5bc0be; background: rgba(91, 192, 190, 0.14); }
+.bb-map-widget-cell.is-tension { border-color: rgba(245, 158, 11, 0.6); }
+.bb-map-widget-cell.is-danger { border-color: rgba(239, 68, 68, 0.7); background: rgba(239, 68, 68, 0.1); }
+.bb-map-widget-open { padding: 7px 10px; text-align: center; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; }
+.bb-map-widget-toggle:hover, .bb-map-widget-open:hover { color: #fff; background: rgba(91, 192, 190, 0.2); }
+.bb-map-widget :focus-visible { outline: 2px solid #5bc0be; outline-offset: 2px; }
+@media (max-width: 600px) {
+    .bb-map-widget { right: 8px; bottom: 72px; width: min(260px, calc(100vw - 16px)); }
+    .bb-map-widget-cell { min-height: 33px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .bb-map-widget { animation: none; }
+}

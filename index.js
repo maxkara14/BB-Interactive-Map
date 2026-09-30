@@ -23,6 +23,10 @@ if (!['main', 'profile', 'custom'].includes(settings.generationSource)) {
 settings.uiLanguage ??= 'auto';
 settings.connectionProfileId ??= '';
 settings.showMenuButton ??= true;
+settings.showWidget ??= true;
+settings.widgetCollapsed ??= true;
+
+const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
 
 function currentLanguage() {
     if (settings.uiLanguage === 'ru' || settings.uiLanguage === 'en') return settings.uiLanguage;
@@ -308,6 +312,7 @@ function showControlCenter() {
         chat_metadata['bb_map_data'] = restored;
         saveChatDebounced();
         injectCurrentMapContext();
+        renderMapWidget();
         showControlCenter();
         toastr.success(tr('Предыдущая карта восстановлена.', 'Previous map restored.'), 'BB Map');
     };
@@ -338,6 +343,7 @@ function showControlCenter() {
                 delete chat_metadata['bb_map_data']; 
                 saveChatDebounced(); 
                 injectCurrentMapContext(); 
+                renderMapWidget();
             }
         } catch (e) {
             console.error("[BB Map] Ошибка очистки API:", e);
@@ -532,6 +538,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 chat_metadata['bb_map_data'] = createSavedMap(data, getMapDataForCurrentChat());
                 saveChatDebounced();
                 injectCurrentMapContext();
+                renderMapWidget();
             } catch (e) {
                 toastr.error(e.message, 'BB Map Memory');
                 return;
@@ -725,11 +732,17 @@ function setupExtensionSettings(rebuild = false) {
             saveSettingsDebounced();
             document.querySelector('#bb-map-menu-item span')?.replaceChildren(document.createTextNode(tr('Интерактивная карта', 'Interactive Map')));
             setupExtensionSettings(true);
+            renderMapWidget();
         });
     checkbox(general, tr('Показывать кнопку в меню расширений', 'Show button in Extensions menu'), settings.showMenuButton, checked => {
         settings.showMenuButton = checked;
         document.getElementById('bb-map-menu-container')?.toggleAttribute('hidden', !checked);
         saveSettingsDebounced();
+    });
+    checkbox(general, tr('Показывать виджет сохранённой карты', 'Show saved map widget'), settings.showWidget, checked => {
+        settings.showWidget = checked;
+        saveSettingsDebounced();
+        renderMapWidget();
     });
 
     const connection = group(tr('Источник сканирования', 'Scan connection'), '⚡', 'connection');
@@ -865,6 +878,99 @@ function setupExtensionSettings(rebuild = false) {
     if (!existing) target.append(panel);
 }
 
+function renderMapWidget() {
+    document.getElementById('bb-map-widget')?.remove();
+    const mapData = getMapDataForCurrentChat();
+    if (!settings.showWidget || !Array.isArray(mapData?.raw?.zones)) return;
+
+    const raw = mapData.raw;
+    const zones = new Map(raw.zones.filter(zone => zone && WIDGET_POSITIONS.includes(zone.position)).map(zone => [zone.position, zone]));
+    const center = zones.get('center');
+    const danger = raw.zones.some(zone => zone?.threat_level === 'danger');
+    const tension = !danger && raw.zones.some(zone => zone?.threat_level === 'tension');
+    const level = danger ? 'danger' : tension ? 'tension' : 'safe';
+    const threatText = danger ? tr('Опасность', 'Danger') : tension ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
+    const widget = document.createElement('section');
+    widget.id = 'bb-map-widget';
+    widget.className = `bb-map-widget bb-map-widget-${level}`;
+    widget.setAttribute('aria-label', tr('Виджет карты', 'Map widget'));
+    widget.innerHTML = `
+        <div class="bb-map-widget-header" tabindex="0" aria-label="${tr('Переместить виджет карты стрелками', 'Move map widget with arrow keys')}">
+            <span class="bb-map-widget-signal" aria-hidden="true"></span>
+            <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
+            <button type="button" class="bb-map-widget-toggle" aria-label="${settings.widgetCollapsed ? tr('Развернуть карту', 'Expand map') : tr('Свернуть карту', 'Collapse map')}" aria-expanded="${!settings.widgetCollapsed}">${settings.widgetCollapsed ? '▣' : '−'}</button>
+        </div>
+        <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
+            <div class="bb-map-widget-meta"><span>${escapeHtml(raw.schematic_name)}</span><span class="bb-map-widget-threat">${threatText}</span></div>
+            <div class="bb-map-widget-grid" aria-label="${tr('Схема зон', 'Zone grid')}">
+                ${WIDGET_POSITIONS.map(position => {
+                    const zone = zones.get(position);
+                    const name = zone?.name || '';
+                    const threatClass = ['safe', 'tension', 'danger'].includes(zone?.threat_level) ? zone.threat_level : 'safe';
+                    return `<span class="bb-map-widget-cell ${zone ? `is-${threatClass}` : 'is-empty'} ${position === 'center' ? 'is-center' : ''}" title="${escapeHtml(name)}">${escapeHtml(name || '·')}</span>`;
+                }).join('')}
+            </div>
+            <button type="button" class="bb-map-widget-open">${tr('Открыть карту', 'Open map')} ↗</button>
+        </div>`;
+    document.body.append(widget);
+
+    const setPosition = (x, y, save = false) => {
+        const width = widget.offsetWidth;
+        const height = widget.offsetHeight;
+        const nextX = Math.max(8, Math.min(x, window.innerWidth - width - 8));
+        const nextY = Math.max(8, Math.min(y, window.innerHeight - height - 8));
+        widget.style.left = `${nextX}px`;
+        widget.style.top = `${nextY}px`;
+        widget.style.right = 'auto';
+        widget.style.bottom = 'auto';
+        if (save) {
+            settings.widgetPosition = { x: nextX, y: nextY };
+            saveSettingsDebounced();
+        }
+    };
+    if (Number.isFinite(settings.widgetPosition?.x) && Number.isFinite(settings.widgetPosition?.y)) {
+        setPosition(settings.widgetPosition.x, settings.widgetPosition.y);
+    }
+
+    widget.querySelector('.bb-map-widget-toggle').onclick = () => {
+        settings.widgetCollapsed = !settings.widgetCollapsed;
+        saveSettingsDebounced();
+        renderMapWidget();
+    };
+    widget.querySelector('.bb-map-widget-open').onclick = () => {
+        const current = getMapDataForCurrentChat();
+        if (current?.raw) showRadarModal(current.raw, true);
+        else renderMapWidget();
+    };
+
+    const handle = widget.querySelector('.bb-map-widget-header');
+    let drag = null;
+    handle.addEventListener('pointerdown', event => {
+        if (event.target.closest('button')) return;
+        const bounds = widget.getBoundingClientRect();
+        drag = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+        handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener('pointermove', event => {
+        if (drag) setPosition(event.clientX - drag.x, event.clientY - drag.y);
+    });
+    handle.addEventListener('pointerup', event => {
+        if (!drag) return;
+        drag = null;
+        handle.releasePointerCapture(event.pointerId);
+        const bounds = widget.getBoundingClientRect();
+        setPosition(bounds.left, bounds.top, true);
+    });
+    handle.addEventListener('pointercancel', () => { drag = null; });
+    handle.addEventListener('keydown', event => {
+        const offsets = { ArrowLeft: [-16, 0], ArrowRight: [16, 0], ArrowUp: [0, -16], ArrowDown: [0, 16] };
+        if (!offsets[event.key]) return;
+        event.preventDefault();
+        const bounds = widget.getBoundingClientRect();
+        setPosition(bounds.left + offsets[event.key][0], bounds.top + offsets[event.key][1], true);
+    });
+}
+
 function injectMapButtonToWandMenu() {
     if ($("#bb-map-menu-item").length > 0) return;
     const menuItem = $(`
@@ -906,10 +1012,15 @@ jQuery(async () => {
             injectMapButtonToWandMenu();
             setupExtensionSettings();
             injectCurrentMapContext(); 
+            renderMapWidget();
         });
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
             injectCurrentMapContext();
+            renderMapWidget();
+        });
+        window.addEventListener('resize', () => {
+            if (document.getElementById('bb-map-widget')) renderMapWidget();
         });
 
         // ЖЕЛЕЗОБЕТОННЫЙ ПЕРЕХВАТЧИК МАКРОСА
@@ -928,6 +1039,7 @@ jQuery(async () => {
         setTimeout(() => {
             injectMapButtonToWandMenu();
             setupExtensionSettings();
+            renderMapWidget();
         }, 2000);
     } catch (e) { console.error("[BB Map] Ошибка запуска:", e); }
 });
