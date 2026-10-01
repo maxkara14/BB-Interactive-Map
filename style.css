@@ -297,7 +297,8 @@
 .bb-map-widget-danger .bb-map-widget-signal { background: #ef4444; box-shadow: 0 0 9px rgba(239, 68, 68, 0.7); }
 .bb-map-widget-tension .bb-map-widget-signal { background: #f59e0b; box-shadow: 0 0 9px rgba(245, 158, 11, 0.7); }
 .bb-map-widget-heading { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
-.bb-map-widget-toggle, .bb-map-widget-open {
+.bb-map-widget-badge { color: #0f1419; background: #5bc0be; border-radius: 4px; padding: 2px 5px; font-size: 9px; font-weight: 700; }
+.bb-map-widget-toggle, .bb-map-widget-open, .bb-map-widget-review, .bb-map-widget-discard {
     color: #5bc0be; background: rgba(91, 192, 190, 0.08); border: 1px solid rgba(91, 192, 190, 0.28);
     border-radius: 6px; cursor: pointer; font: inherit;
 }
@@ -320,8 +321,11 @@
 .bb-map-widget-cell.is-center { border-color: #5bc0be; background: rgba(91, 192, 190, 0.14); }
 .bb-map-widget-cell.is-tension { border-color: rgba(245, 158, 11, 0.6); }
 .bb-map-widget-cell.is-danger { border-color: rgba(239, 68, 68, 0.7); background: rgba(239, 68, 68, 0.1); }
-.bb-map-widget-open { padding: 7px 10px; text-align: center; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; }
-.bb-map-widget-toggle:hover, .bb-map-widget-open:hover { color: #fff; background: rgba(91, 192, 190, 0.2); }
+.bb-map-widget-update { color: #94a3b8; font-size: 11px; text-align: center; }
+.bb-map-widget-open, .bb-map-widget-review, .bb-map-widget-discard { padding: 7px 10px; text-align: center; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; }
+.bb-map-widget-review { border-color: #5bc0be; color: #e2e8f0; background: rgba(91, 192, 190, 0.18); }
+.bb-map-widget-discard { color: #94a3b8; }
+.bb-map-widget-toggle:hover, .bb-map-widget-open:hover, .bb-map-widget-review:hover, .bb-map-widget-discard:hover { color: #fff; background: rgba(91, 192, 190, 0.2); }
 .bb-map-widget :focus-visible { outline: 2px solid #5bc0be; outline-offset: 2px; }
 @media (max-width: 600px) {
     .bb-map-widget { right: 8px; bottom: 72px; width: min(260px, calc(100vw - 16px)); }

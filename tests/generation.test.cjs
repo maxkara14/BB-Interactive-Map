@@ -8,13 +8,13 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');
 const setupSource = source.slice(0, source.indexOf('jQuery(async () => {'))
     .replace(/^import .*;\r?\n/gm, '');
 
-function loadMap(initialSettings, service, fetch) {
+function loadMap(initialSettings, service, fetch, quietPrompt = async () => '{"main":true}') {
     const setting = { ...initialSettings };
     const context = {
         extension_settings: { 'BB-Interactive-Map': setting },
         SillyTavern: { getContext: () => ({ ConnectionManagerRequestService: service }) },
         navigator: { language: 'en-US' },
-        generateQuietPrompt: async () => '{"main":true}',
+        generateQuietPrompt: quietPrompt,
         fetch,
         console: { warn() {} },
     };
@@ -60,9 +60,12 @@ test('missing profile fails before sending a request', async () => {
 });
 
 test('main source uses SillyTavern generation', async () => {
+    let requestedPrompt;
     const map = loadMap({ generationSource: 'main' }, null,
-        async () => { throw new Error('Custom API must not be called'); });
+        async () => { throw new Error('Custom API must not be called'); },
+        async params => { requestedPrompt = params.quietPrompt; return '{"main":true}'; });
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
+    assert.equal(requestedPrompt, 'Map this scene');
 });
 
 test('empty profile result is rejected', async () => {
@@ -96,4 +99,92 @@ test('incomplete legacy Custom API settings still use the main connection', asyn
     const map = loadMap({ useCustomApi: true, customApiUrl: '', customApiModel: '' },
         null, async () => { throw new Error('Custom API must not be called'); });
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
+});
+
+test('automatic scan is opt-in, rate limited, and keeps the candidate unsaved', async () => {
+    const timers = [];
+    const metadata = { bb_map_data: { raw: { zones: [] } } };
+    const chat = { chatId: 'chat-a', characterId: 1, groupId: null, chatMetadata: metadata };
+    let activeChat = chat;
+    const context = {
+        extension_settings: { 'BB-Interactive-Map': {} },
+        chat_metadata: metadata,
+        isChatSaving: false,
+        SillyTavern: { getContext: () => activeChat },
+        navigator: { language: 'en-US' },
+        document: { body: { dataset: {} } },
+        setTimeout: callback => { timers.push(callback); return timers.length; },
+        clearTimeout: () => {},
+        isSameChat: (a, b) => a.chatId === b.chatId && a.chatMetadata === b.chatMetadata,
+        console,
+    };
+    vm.runInNewContext(`${setupSource}
+        renderMapWidget = () => {};
+        createMapCandidate = async () => {
+            globalThis.requests++;
+            return globalThis.holdScan
+                ? new Promise(resolve => { globalThis.finishScan = resolve; })
+                : { zones: [] };
+        };
+        globalThis.requests = 0;
+        globalThis.mapTest = {
+            queueAutoScan, resetAutoUpdate, settings,
+            state: () => ({ status: autoStatus, candidate: autoCandidate }),
+            setBusy: value => { generationBusy = value; },
+            setScanning: value => { scanInProgress = value; },
+        };`, context);
+    const map = context.mapTest;
+    map.queueAutoScan(chat);
+    await timers.shift()();
+    assert.equal(context.requests, 0);
+
+    map.settings.autoUpdate = true;
+    map.queueAutoScan(chat);
+    await timers.shift()();
+    assert.equal(context.requests, 1);
+    assert.equal(map.state().status, 'ready');
+    assert.ok(map.state().candidate);
+    assert.equal(metadata.bb_map_data.raw.zones.length, 0);
+
+    map.resetAutoUpdate();
+    map.queueAutoScan(chat);
+    await timers.shift()();
+    assert.equal(context.requests, 1);
+
+    activeChat = { ...chat, chatId: 'chat-b', chatMetadata: {} };
+    map.queueAutoScan(chat);
+    await timers.shift()();
+    assert.equal(context.requests, 1);
+
+    activeChat = { ...chat, chatId: 'chat-c' };
+    map.setBusy(true);
+    map.queueAutoScan(activeChat);
+    await timers.shift()();
+    assert.equal(context.requests, 1);
+    map.setBusy(false);
+    await timers.shift()();
+    assert.equal(context.requests, 2);
+
+    map.resetAutoUpdate();
+    activeChat = { ...chat, chatId: 'chat-d' };
+    map.setScanning(true);
+    map.queueAutoScan(activeChat);
+    await timers.shift()();
+    assert.equal(context.requests, 2);
+    map.setScanning(false);
+    await timers.shift()();
+    assert.equal(context.requests, 3);
+
+    map.resetAutoUpdate();
+    activeChat = { ...chat, chatId: 'chat-e' };
+    context.holdScan = true;
+    map.queueAutoScan(activeChat);
+    const running = timers.shift()();
+    assert.equal(context.requests, 4);
+    map.settings.autoUpdate = false;
+    map.resetAutoUpdate();
+    context.finishScan({ zones: [] });
+    await running;
+    assert.equal(map.state().status, 'idle');
+    assert.equal(map.state().candidate, null);
 });

@@ -1,6 +1,6 @@
 /* global toastr, jQuery, SillyTavern */
 
-import { setExtensionPrompt, chat_metadata, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
+import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat } from './map-state.js';
 
@@ -24,9 +24,21 @@ settings.uiLanguage ??= 'auto';
 settings.connectionProfileId ??= '';
 settings.showWidget ??= true;
 settings.widgetCollapsed ??= true;
+settings.autoUpdate ??= false;
+if (![1, 5, 10, 30].includes(Number(settings.autoUpdateMinutes))) settings.autoUpdateMinutes = 5;
 if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
+const lastAutoScan = new Map();
+let scanInProgress = false;
+let generationBusy = false;
+let generationStopped = false;
+let pendingReply = null;
+let autoScanTimer = null;
+let autoCandidate = null;
+let autoCandidateChat = null;
+let autoCandidateBase = null;
+let autoStatus = 'idle';
 
 function currentLanguage() {
     if (settings.uiLanguage === 'ru' || settings.uiLanguage === 'en') return settings.uiLanguage;
@@ -87,9 +99,9 @@ Recent chat: """{{lastMessages}}"""
 
 async function runMainGen(promptText) {
     if (typeof generateQuietPrompt === 'function') {
-        return await generateQuietPrompt(promptText);
+        return await generateQuietPrompt({ quietPrompt: promptText });
     } else if (typeof window['generateQuietPrompt'] === 'function') {
-        return await window['generateQuietPrompt'](promptText);
+        return await window['generateQuietPrompt']({ quietPrompt: promptText });
     } else {
         throw new Error(tr('Функция генерации SillyTavern недоступна.', 'SillyTavern generation is unavailable.'));
     }
@@ -213,7 +225,7 @@ function injectCurrentMapContext() {
     }
 }
 
-function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext()) {
+function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -376,8 +388,15 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 if (!chat_metadata || !isSameChat(chatForMap, SillyTavern.getContext())) {
                     throw new Error(tr('Чат сменился. Запустите скан ещё раз.', 'The chat changed. Please scan again.'));
                 }
+                if (getMapDataForCurrentChat() !== expectedMap) {
+                    throw new Error(tr('Карта уже изменилась. Запустите скан ещё раз.', 'The map changed. Please scan again.'));
+                }
                 chat_metadata['bb_map_data'] = createSavedMap(data, getMapDataForCurrentChat());
                 saveChatDebounced();
+                autoCandidate = null;
+                autoCandidateChat = null;
+                autoCandidateBase = null;
+                autoStatus = 'idle';
                 injectCurrentMapContext();
                 renderMapWidget();
                 setupExtensionSettings(true);
@@ -405,15 +424,8 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     };
 }
 
-async function triggerMapScan(btnElement, scaleMode = 'local') {
-    if (btnElement.disabled) return;
-    const chatForScan = SillyTavern.getContext();
+async function createMapCandidate(chatForScan, scaleMode) {
     const chat = chatForScan.chat;
-    if (!chat || chat.length === 0) {
-        // @ts-ignore
-        return toastr.warning(tr('Чат пуст. Карту пока нельзя создать.', 'The chat is empty. A map cannot be created yet.'), 'BB Map');
-    }
-
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
     
     let scaleInstruction = "";
@@ -429,23 +441,33 @@ async function triggerMapScan(btnElement, scaleMode = 'local') {
         prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${prevData.context}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
     }
 
+    const prompt = MAP_PROMPT
+        .replace('{{lastMessages}}', recentMessages)
+        .replace('{{scaleInstruction}}', scaleInstruction)
+        .replace('{{previousMap}}', prevMapInstruction);
+    const result = await generateMapFast(prompt);
+    if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData) return null;
+    return normalizeMapData(extractJSON(result), prevData?.raw);
+}
+
+async function triggerMapScan(btnElement, scaleMode = 'local') {
+    if (btnElement.disabled || scanInProgress) return;
+    const chatForScan = SillyTavern.getContext();
+    if (!chatForScan.chat?.length) {
+        toastr.warning(tr('Чат пуст. Карту пока нельзя создать.', 'The chat is empty. A map cannot be created yet.'), 'BB Map');
+        return;
+    }
+
     const oldHtml = btnElement.innerHTML;
     btnElement.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; ${tr('СКАНИРОВАНИЕ...', 'SCANNING...')}`;
     btnElement.disabled = true;
-
+    scanInProgress = true;
     try {
-        let prompt = MAP_PROMPT
-            .replace('{{lastMessages}}', recentMessages)
-            .replace('{{scaleInstruction}}', scaleInstruction)
-            .replace('{{previousMap}}', prevMapInstruction);
-            
-        let result = await generateMapFast(prompt);
-        
-        if (!isSameChat(chatForScan, SillyTavern.getContext())) {
-            toastr.warning(tr('Чат сменился во время сканирования. Результат не сохранён.', 'The chat changed during the scan. The result was discarded.'), 'BB Map');
+        const data = await createMapCandidate(chatForScan, scaleMode);
+        if (!data) {
+            toastr.warning(tr('Чат или карта изменились во время сканирования. Результат не сохранён.', 'The chat or map changed during the scan. The result was discarded.'), 'BB Map');
             return;
         }
-        const data = normalizeMapData(extractJSON(result), getMapDataForCurrentChat()?.raw);
         showRadarModal(data, false, chatForScan);
     } catch (err) {
         // @ts-ignore
@@ -454,9 +476,65 @@ async function triggerMapScan(btnElement, scaleMode = 'local') {
             : err.message;
         toastr.error(tr('Ошибка карты: ', 'Map error: ') + message, 'BB Map');
     } finally {
+        scanInProgress = false;
         btnElement.innerHTML = oldHtml;
         btnElement.disabled = false;
     }
+}
+
+function resetAutoUpdate() {
+    clearTimeout(autoScanTimer);
+    autoScanTimer = null;
+    pendingReply = null;
+    autoCandidate = null;
+    autoCandidateChat = null;
+    autoCandidateBase = null;
+    autoStatus = 'idle';
+}
+
+function autoScanKey(context) {
+    return `${context.groupId ?? ''}:${context.characterId ?? ''}:${context.chatId}`;
+}
+
+function queueAutoScan(chatForScan, queuedAt = Date.now()) {
+    clearTimeout(autoScanTimer);
+    autoScanTimer = setTimeout(async () => {
+        autoScanTimer = null;
+        if (!settings.autoUpdate || generationStopped || autoCandidate) return;
+        if (!isSameChat(chatForScan, SillyTavern.getContext()) || !getMapDataForCurrentChat()?.raw) return;
+        if (generationBusy || document.body.dataset.generating || isChatSaving || scanInProgress) {
+            if (Date.now() - queuedAt < 30_000) queueAutoScan(chatForScan, queuedAt);
+            return;
+        }
+        const key = autoScanKey(chatForScan);
+        const now = Date.now();
+        if (now - (lastAutoScan.get(key) || 0) < Number(settings.autoUpdateMinutes) * 60_000) return;
+
+        lastAutoScan.set(key, now);
+        scanInProgress = true;
+        autoStatus = 'scanning';
+        renderMapWidget();
+        try {
+            const candidate = await createMapCandidate(chatForScan, settings.scanScale);
+            if (!candidate || !settings.autoUpdate || !getMapDataForCurrentChat()?.raw
+                || !isSameChat(chatForScan, SillyTavern.getContext())) {
+                if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
+                return;
+            }
+            autoCandidate = candidate;
+            autoCandidateChat = chatForScan;
+            autoCandidateBase = getMapDataForCurrentChat();
+            autoStatus = 'ready';
+        } catch {
+            if (isSameChat(chatForScan, SillyTavern.getContext())) {
+                console.warn('[BB Map] Automatic scan failed. Check the selected connection and try a manual scan.');
+                autoStatus = 'error';
+            }
+        } finally {
+            scanInProgress = false;
+            if (isSameChat(chatForScan, SillyTavern.getContext())) renderMapWidget();
+        }
+    }, 1500);
 }
 
 function setupExtensionSettings(rebuild = false) {
@@ -602,6 +680,19 @@ function setupExtensionSettings(rebuild = false) {
             settings.scanScale = value;
             saveSettingsDebounced();
         });
+    checkbox(mapTools, tr('Готовить обновление после реплики', 'Prepare an update after each reply'), settings.autoUpdate, checked => {
+        settings.autoUpdate = checked;
+        if (!checked) resetAutoUpdate();
+        saveSettingsDebounced();
+        renderMapWidget();
+    });
+    select(mapTools, tr('Минимальный интервал, минут', 'Minimum interval, minutes'), String(settings.autoUpdateMinutes),
+        [[1, '1'], [5, '5'], [10, '10'], [30, '30']], value => {
+            settings.autoUpdateMinutes = Number(value);
+            saveSettingsDebounced();
+        });
+    note(mapTools, tr('Каждое обновление расходует один запрос к выбранной модели. Карта меняется только после вашего подтверждения.',
+        'Each update uses one request to the selected model. The map changes only after you confirm it.'));
     const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {
         void triggerMapScan(scan, settings.scanScale);
     });
@@ -635,6 +726,7 @@ function setupExtensionSettings(rebuild = false) {
         if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         delete chat_metadata.bb_map_data;
         saveChatDebounced();
+        resetAutoUpdate();
         injectCurrentMapContext();
         renderMapWidget();
         setupExtensionSettings(true);
@@ -794,6 +886,8 @@ function renderMapWidget() {
         <div class="bb-map-widget-header" tabindex="0" aria-label="${tr('Переместить виджет карты стрелками', 'Move map widget with arrow keys')}">
             <span class="bb-map-widget-signal" aria-hidden="true"></span>
             <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
+            ${autoStatus !== 'idle' && settings.autoUpdate ? `<span class="bb-map-widget-badge" aria-live="polite">${autoStatus === 'scanning'
+                ? tr('СКАН', 'SCAN') : autoStatus === 'ready' ? tr('НОВОЕ', 'NEW') : tr('СБОЙ', 'ERROR')}</span>` : ''}
             <button type="button" class="bb-map-widget-toggle" aria-label="${settings.widgetCollapsed ? tr('Развернуть карту', 'Expand map') : tr('Свернуть карту', 'Collapse map')}" aria-expanded="${!settings.widgetCollapsed}">${settings.widgetCollapsed ? '▣' : '−'}</button>
         </div>
         <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
@@ -806,6 +900,13 @@ function renderMapWidget() {
                     return `<span class="bb-map-widget-cell ${zone ? `is-${threatClass}` : 'is-empty'} ${position === 'center' ? 'is-center' : ''}" title="${escapeHtml(name)}">${escapeHtml(name || '·')}</span>`;
                 }).join('')}
             </div>
+            ${settings.autoUpdate && autoStatus !== 'idle' ? `<div class="bb-map-widget-update" role="status">${autoStatus === 'scanning'
+                ? tr('Готовится обновление карты…', 'Preparing a map update…')
+                : autoStatus === 'ready'
+                    ? tr('Обновление готово к проверке', 'Update ready for review')
+                    : tr('Не удалось подготовить обновление', 'Could not prepare an update')}</div>` : ''}
+            ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-review">${tr('Проверить обновление', 'Review update')} ↗</button>` : ''}
+            ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-discard">${tr('Отклонить обновление', 'Discard update')}</button>` : ''}
             <button type="button" class="bb-map-widget-open">${tr('Открыть карту', 'Open map')} ↗</button>
         </div>`;
     document.body.append(widget);
@@ -837,6 +938,21 @@ function renderMapWidget() {
         const current = getMapDataForCurrentChat();
         if (current?.raw) showRadarModal(current.raw, true);
         else renderMapWidget();
+    };
+    const review = widget.querySelector('.bb-map-widget-review');
+    if (review) review.onclick = () => {
+        if (autoCandidate && isSameChat(autoCandidateChat, SillyTavern.getContext())
+            && getMapDataForCurrentChat() === autoCandidateBase) {
+            showRadarModal(autoCandidate, false, autoCandidateChat, autoCandidateBase);
+        } else {
+            resetAutoUpdate();
+            renderMapWidget();
+        }
+    };
+    const discard = widget.querySelector('.bb-map-widget-discard');
+    if (discard) discard.onclick = () => {
+        resetAutoUpdate();
+        renderMapWidget();
     };
 
     const handle = widget.querySelector('.bb-map-widget-header');
@@ -888,10 +1004,38 @@ jQuery(async () => {
         });
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
+            resetAutoUpdate();
             document.getElementById('bb-map-overlay')?.remove();
             injectCurrentMapContext();
             renderMapWidget();
             setupExtensionSettings(true);
+        });
+        eventSource.on(event_types.GENERATION_STARTED, () => {
+            generationBusy = true;
+            generationStopped = false;
+        });
+        eventSource.on(event_types.MESSAGE_RECEIVED, (messageId, type) => {
+            if (!settings.autoUpdate || generationStopped || type === 'first_message' || type === 'extension') return;
+            const chatForReply = SillyTavern.getContext();
+            const message = chatForReply.chat?.[messageId];
+            if (!message || message.is_user || !message.gen_finished) return;
+            pendingReply = chatForReply;
+            if (!generationBusy) {
+                queueAutoScan(pendingReply);
+                pendingReply = null;
+            }
+        });
+        eventSource.on(event_types.GENERATION_ENDED, () => {
+            generationBusy = false;
+            if (pendingReply) queueAutoScan(pendingReply);
+            pendingReply = null;
+        });
+        eventSource.on(event_types.GENERATION_STOPPED, () => {
+            generationBusy = false;
+            generationStopped = true;
+            clearTimeout(autoScanTimer);
+            autoScanTimer = null;
+            pendingReply = null;
         });
         window.addEventListener('resize', () => {
             if (document.getElementById('bb-map-widget')) renderMapWidget();
