@@ -303,10 +303,10 @@
     border-radius: 6px; cursor: pointer; font: inherit;
 }
 .bb-map-widget-toggle { width: 30px; height: 28px; flex: 0 0 30px; font-size: 18px; line-height: 1; }
-.bb-map-widget-content { display: grid; gap: 10px; padding: 0 11px 11px; }
+.bb-map-widget-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 0 11px 11px; }
 .bb-map-widget-content[hidden] { display: none; }
-.bb-map-widget-meta { display: flex; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 9px; color: #94a3b8; }
-.bb-map-widget-meta > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bb-map-widget-meta { display: flex; min-width: 0; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 9px; color: #94a3b8; }
+.bb-map-widget-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bb-map-widget-threat { flex: 0 0 auto; color: #4ade80; }
 .bb-map-widget-danger .bb-map-widget-threat { color: #f87171; }
 .bb-map-widget-tension .bb-map-widget-threat { color: #fbbf24; }
