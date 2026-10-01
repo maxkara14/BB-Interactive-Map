@@ -1,6 +1,6 @@
 /* global toastr, jQuery, SillyTavern */
 
-import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
+import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat } from './map-state.js';
 
@@ -25,11 +25,11 @@ settings.connectionProfileId ??= '';
 settings.showWidget ??= true;
 settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
+settings.autoApply ??= false;
 if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
 let scanInProgress = false;
-let generationBusy = false;
 let generationStopped = false;
 let generationSnapshot = null;
 let pendingReply = null;
@@ -507,18 +507,32 @@ function queueAutoScan(chatForScan) {
             autoStatus = 'idle';
             return;
         }
-        if (generationBusy || document.body.dataset.generating || isChatSaving || scanInProgress) {
+        if (document.body.dataset.generating || isChatSaving || scanInProgress) {
             queueAutoScan(chatForScan);
             return;
         }
+        const reply = chatForScan.chat?.at(-1);
+        const replyText = reply?.mes;
+        const baseMap = getMapDataForCurrentChat();
         scanInProgress = true;
         autoStatus = 'scanning';
         renderMapWidget();
         try {
             const candidate = await createMapCandidate(chatForScan, settings.scanScale);
-            if (!candidate || !settings.autoUpdate || !getMapDataForCurrentChat()?.raw
+            if (!candidate || !settings.autoUpdate || getMapDataForCurrentChat() !== baseMap
+                || chatForScan.chat?.at(-1) !== reply || reply?.mes !== replyText
                 || !isSameChat(chatForScan, SillyTavern.getContext())) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
+                return;
+            }
+            if (settings.autoApply) {
+                chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
+                await saveChatConditional();
+                if (isSameChat(chatForScan, SillyTavern.getContext())) {
+                    autoStatus = 'updated';
+                    injectCurrentMapContext();
+                    setupExtensionSettings(true);
+                }
                 return;
             }
             autoCandidate = candidate;
@@ -538,8 +552,8 @@ function queueAutoScan(chatForScan) {
 }
 
 function handleGenerationStarted(type) {
-    generationBusy = true;
     generationStopped = false;
+    pendingReply = null;
     const context = SillyTavern.getContext();
     const last = context.chat?.at(-1);
     generationSnapshot = type === 'quiet' || type === 'impersonate' ? null : {
@@ -553,16 +567,11 @@ function handleMessageReceived(messageId, type) {
     const message = chatForReply.chat?.[messageId];
     if (!message || message.is_user || !message.mes) return;
     pendingReply = chatForReply;
-    if (!generationBusy) {
-        queueAutoScan(pendingReply);
-        pendingReply = null;
-    }
+    queueAutoScan(chatForReply);
 }
 
 function handleGenerationEnded() {
-    generationBusy = false;
-    if (pendingReply) queueAutoScan(pendingReply);
-    else if (settings.autoUpdate && !generationStopped && generationSnapshot
+    if (!pendingReply && settings.autoUpdate && !generationStopped && generationSnapshot
         && isSameChat(generationSnapshot.context, SillyTavern.getContext())) {
         const latest = SillyTavern.getContext().chat?.at(-1);
         if (latest && !latest.is_user && latest.mes
@@ -576,7 +585,6 @@ function handleGenerationEnded() {
 }
 
 function handleGenerationStopped() {
-    generationBusy = false;
     generationStopped = true;
     clearTimeout(autoScanTimer);
     autoScanTimer = null;
@@ -737,8 +745,14 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         renderMapWidget();
     });
-    note(mapTools, tr('После завершённой реплики — один запрос к выбранной модели. Пока предложение ждёт проверки, новые запросы не запускаются. Карта сохраняется только после подтверждения.',
-        'A completed reply uses one request to the selected model. No new requests run while a proposal awaits review. The map is saved only after confirmation.'));
+    checkbox(mapTools, tr('Сохранять обновление автоматически', 'Save updates automatically'), settings.autoApply, checked => {
+        settings.autoApply = checked;
+        if (checked) resetAutoUpdate();
+        saveSettingsDebounced();
+        renderMapWidget();
+    });
+    note(mapTools, tr('После ответа персонажа — один запрос к выбранной модели. Без автосохранения обновление ждёт проверки; с автосохранением карта сразу заменяется, а предыдущую можно восстановить.',
+        'After a character reply, one request goes to the selected model. Without automatic saving, the update waits for review; with it, the map is replaced and the previous version can be restored.'));
     const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {
         void triggerMapScan(scan, settings.scanScale);
     });
@@ -934,7 +948,7 @@ function renderMapWidget() {
             <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
             ${autoStatus !== 'idle' && settings.autoUpdate ? `<span class="bb-map-widget-badge" aria-live="polite">${autoStatus === 'scanning'
                 ? tr('СКАН', 'SCAN') : autoStatus === 'waiting' ? tr('ЖДЁТ', 'WAIT')
-                    : autoStatus === 'ready' ? tr('НОВОЕ', 'NEW') : tr('СБОЙ', 'ERROR')}</span>` : ''}
+                    : autoStatus === 'ready' ? tr('НОВОЕ', 'NEW') : autoStatus === 'updated' ? tr('ГОТОВО', 'DONE') : tr('СБОЙ', 'ERROR')}</span>` : ''}
             <button type="button" class="bb-map-widget-toggle" aria-label="${settings.widgetCollapsed ? tr('Развернуть карту', 'Expand map') : tr('Свернуть карту', 'Collapse map')}" aria-expanded="${!settings.widgetCollapsed}">${settings.widgetCollapsed ? '▣' : '−'}</button>
         </div>
         <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
@@ -950,9 +964,11 @@ function renderMapWidget() {
             ${settings.autoUpdate && autoStatus !== 'idle' ? `<div class="bb-map-widget-update" role="status">${autoStatus === 'scanning'
                 ? tr('Готовится обновление карты…', 'Preparing a map update…')
                 : autoStatus === 'waiting'
-                    ? tr('Ожидает завершения реплики…', 'Waiting for the reply to finish…')
+                    ? tr('Ожидает запуска сканирования…', 'Waiting to start the scan…')
                 : autoStatus === 'ready'
                     ? tr('Обновление готово к проверке', 'Update ready for review')
+                    : autoStatus === 'updated'
+                        ? tr('Карта обновлена', 'Map updated')
                     : tr('Не удалось подготовить обновление', 'Could not prepare an update')}</div>` : ''}
             ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-review">${tr('Проверить обновление', 'Review update')} ↗</button>` : ''}
             ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-discard">${tr('Отклонить обновление', 'Discard update')}</button>` : ''}

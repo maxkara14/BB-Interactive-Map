@@ -101,15 +101,18 @@ test('incomplete legacy Custom API settings still use the main connection', asyn
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
 });
 
-test('automatic scan runs after each reply and keeps the candidate unsaved', async () => {
+test('automatic scan follows character replies and saves only in automatic mode', async () => {
     const timers = [];
     const metadata = { bb_map_data: { raw: { zones: [] } } };
     const chat = { chatId: 'chat-a', characterId: 1, groupId: null, chatMetadata: metadata };
     let activeChat = chat;
+    let saves = 0;
     const context = {
         extension_settings: { 'BB-Interactive-Map': {} },
         chat_metadata: metadata,
         isChatSaving: false,
+        saveChatConditional: async () => { saves++; },
+        createSavedMap: (candidate, previous) => ({ raw: candidate, previous }),
         SillyTavern: { getContext: () => activeChat },
         navigator: { language: 'en-US' },
         document: { body: { dataset: {} } },
@@ -120,6 +123,8 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
     };
     vm.runInNewContext(`${setupSource}
         renderMapWidget = () => {};
+        injectCurrentMapContext = () => {};
+        setupExtensionSettings = () => {};
         createMapCandidate = async () => {
             globalThis.requests++;
             return globalThis.holdScan
@@ -131,7 +136,7 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
             queueAutoScan, resetAutoUpdate, settings,
             handleGenerationStarted, handleMessageReceived, handleGenerationEnded,
             state: () => ({ status: autoStatus, candidate: autoCandidate }),
-            setBusy: value => { generationBusy = value; },
+            setGenerating: value => { document.body.dataset.generating = value ? 'true' : undefined; },
             setScanning: value => { scanInProgress = value; },
         };`, context);
     const map = context.mapTest;
@@ -146,6 +151,7 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
     assert.equal(map.state().status, 'ready');
     assert.ok(map.state().candidate);
     assert.equal(metadata.bb_map_data.raw.zones.length, 0);
+    assert.equal(saves, 0);
 
     map.resetAutoUpdate();
     map.queueAutoScan(chat);
@@ -159,11 +165,11 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
     assert.equal(context.requests, 2);
 
     activeChat = { ...chat, chatId: 'chat-c' };
-    map.setBusy(true);
+    map.setGenerating(true);
     map.queueAutoScan(activeChat);
     await timers.shift()();
     assert.equal(context.requests, 2);
-    map.setBusy(false);
+    map.setGenerating(false);
     await timers.shift()();
     assert.equal(context.requests, 3);
 
@@ -196,10 +202,10 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
     map.handleGenerationStarted('swipe');
     activeChat.chat[0].mes = 'New reply';
     map.handleMessageReceived(0, 'swipe'); // Some integrations omit gen_finished.
-    map.handleGenerationEnded();
-    await timers.shift()();
+    await timers.shift()(); // MESSAGE_RECEIVED must start the scan even without GENERATION_ENDED.
     assert.equal(context.requests, 6);
     assert.equal(map.state().status, 'ready');
+    map.handleGenerationEnded();
 
     map.resetAutoUpdate();
     activeChat = { ...chat, chatId: 'chat-g', chat: [{ mes: 'Old reply', is_user: false }] };
@@ -208,4 +214,26 @@ test('automatic scan runs after each reply and keeps the candidate unsaved', asy
     map.handleGenerationEnded(); // A missed MESSAGE_RECEIVED still schedules a scan.
     await timers.shift()();
     assert.equal(context.requests, 7);
+
+    map.resetAutoUpdate();
+    map.settings.autoApply = true;
+    activeChat = { ...chat, chatId: 'chat-h', chat: [{ mes: 'Another reply', is_user: false }] };
+    map.handleMessageReceived(0, 'normal');
+    await timers.shift()();
+    assert.equal(context.requests, 8);
+    assert.equal(saves, 1);
+    assert.equal(map.state().status, 'updated');
+    assert.equal(map.state().candidate, null);
+    assert.ok(metadata.bb_map_data.previous);
+
+    map.resetAutoUpdate();
+    context.holdScan = true;
+    activeChat = { ...chat, chatId: 'chat-i', chat: [{ mes: 'Current reply', is_user: false }] };
+    map.handleMessageReceived(0, 'normal');
+    const staleScan = timers.shift()();
+    activeChat.chat[0].mes = 'Rerolled reply';
+    context.finishScan({ zones: [] });
+    await staleScan;
+    assert.equal(saves, 1);
+    assert.equal(map.state().status, 'idle');
 });
