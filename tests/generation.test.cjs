@@ -101,7 +101,7 @@ test('incomplete legacy Custom API settings still use the main connection', asyn
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
 });
 
-test('automatic scan is opt-in, rate limited, and keeps the candidate unsaved', async () => {
+test('automatic scan runs after each reply and keeps the candidate unsaved', async () => {
     const timers = [];
     const metadata = { bb_map_data: { raw: { zones: [] } } };
     const chat = { chatId: 'chat-a', characterId: 1, groupId: null, chatMetadata: metadata };
@@ -129,6 +129,7 @@ test('automatic scan is opt-in, rate limited, and keeps the candidate unsaved', 
         globalThis.requests = 0;
         globalThis.mapTest = {
             queueAutoScan, resetAutoUpdate, settings,
+            handleGenerationStarted, handleMessageReceived, handleGenerationEnded,
             state: () => ({ status: autoStatus, candidate: autoCandidate }),
             setBusy: value => { generationBusy = value; },
             setScanning: value => { scanInProgress = value; },
@@ -149,42 +150,62 @@ test('automatic scan is opt-in, rate limited, and keeps the candidate unsaved', 
     map.resetAutoUpdate();
     map.queueAutoScan(chat);
     await timers.shift()();
-    assert.equal(context.requests, 1);
+    assert.equal(context.requests, 2);
 
+    map.resetAutoUpdate();
     activeChat = { ...chat, chatId: 'chat-b', chatMetadata: {} };
     map.queueAutoScan(chat);
     await timers.shift()();
-    assert.equal(context.requests, 1);
+    assert.equal(context.requests, 2);
 
     activeChat = { ...chat, chatId: 'chat-c' };
     map.setBusy(true);
     map.queueAutoScan(activeChat);
     await timers.shift()();
-    assert.equal(context.requests, 1);
+    assert.equal(context.requests, 2);
     map.setBusy(false);
     await timers.shift()();
-    assert.equal(context.requests, 2);
+    assert.equal(context.requests, 3);
 
     map.resetAutoUpdate();
     activeChat = { ...chat, chatId: 'chat-d' };
     map.setScanning(true);
     map.queueAutoScan(activeChat);
     await timers.shift()();
-    assert.equal(context.requests, 2);
+    assert.equal(context.requests, 3);
     map.setScanning(false);
     await timers.shift()();
-    assert.equal(context.requests, 3);
+    assert.equal(context.requests, 4);
 
     map.resetAutoUpdate();
     activeChat = { ...chat, chatId: 'chat-e' };
     context.holdScan = true;
     map.queueAutoScan(activeChat);
     const running = timers.shift()();
-    assert.equal(context.requests, 4);
+    assert.equal(context.requests, 5);
     map.settings.autoUpdate = false;
     map.resetAutoUpdate();
     context.finishScan({ zones: [] });
     await running;
     assert.equal(map.state().status, 'idle');
     assert.equal(map.state().candidate, null);
+
+    context.holdScan = false;
+    map.settings.autoUpdate = true;
+    activeChat = { ...chat, chatId: 'chat-f', chat: [{ mes: 'Old reply', is_user: false }] };
+    map.handleGenerationStarted('swipe');
+    activeChat.chat[0].mes = 'New reply';
+    map.handleMessageReceived(0, 'swipe'); // Some integrations omit gen_finished.
+    map.handleGenerationEnded();
+    await timers.shift()();
+    assert.equal(context.requests, 6);
+    assert.equal(map.state().status, 'ready');
+
+    map.resetAutoUpdate();
+    activeChat = { ...chat, chatId: 'chat-g', chat: [{ mes: 'Old reply', is_user: false }] };
+    map.handleGenerationStarted('swipe');
+    activeChat.chat[0].mes = 'New reply';
+    map.handleGenerationEnded(); // A missed MESSAGE_RECEIVED still schedules a scan.
+    await timers.shift()();
+    assert.equal(context.requests, 7);
 });

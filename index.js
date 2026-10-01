@@ -25,14 +25,13 @@ settings.connectionProfileId ??= '';
 settings.showWidget ??= true;
 settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
-if (![1, 5, 10, 30].includes(Number(settings.autoUpdateMinutes))) settings.autoUpdateMinutes = 5;
 if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
-const lastAutoScan = new Map();
 let scanInProgress = false;
 let generationBusy = false;
 let generationStopped = false;
+let generationSnapshot = null;
 let pendingReply = null;
 let autoScanTimer = null;
 let autoCandidate = null;
@@ -486,31 +485,32 @@ function resetAutoUpdate() {
     clearTimeout(autoScanTimer);
     autoScanTimer = null;
     pendingReply = null;
+    generationSnapshot = null;
     autoCandidate = null;
     autoCandidateChat = null;
     autoCandidateBase = null;
     autoStatus = 'idle';
 }
 
-function autoScanKey(context) {
-    return `${context.groupId ?? ''}:${context.characterId ?? ''}:${context.chatId}`;
-}
-
-function queueAutoScan(chatForScan, queuedAt = Date.now()) {
+function queueAutoScan(chatForScan) {
     clearTimeout(autoScanTimer);
+    if (autoStatus !== 'waiting' && settings.autoUpdate && !autoCandidate
+        && isSameChat(chatForScan, SillyTavern.getContext()) && getMapDataForCurrentChat()?.raw) {
+        autoStatus = 'waiting';
+        renderMapWidget();
+    }
     autoScanTimer = setTimeout(async () => {
         autoScanTimer = null;
         if (!settings.autoUpdate || generationStopped || autoCandidate) return;
-        if (!isSameChat(chatForScan, SillyTavern.getContext()) || !getMapDataForCurrentChat()?.raw) return;
-        if (generationBusy || document.body.dataset.generating || isChatSaving || scanInProgress) {
-            if (Date.now() - queuedAt < 30_000) queueAutoScan(chatForScan, queuedAt);
+        if (!isSameChat(chatForScan, SillyTavern.getContext())) return;
+        if (!getMapDataForCurrentChat()?.raw) {
+            autoStatus = 'idle';
             return;
         }
-        const key = autoScanKey(chatForScan);
-        const now = Date.now();
-        if (now - (lastAutoScan.get(key) || 0) < Number(settings.autoUpdateMinutes) * 60_000) return;
-
-        lastAutoScan.set(key, now);
+        if (generationBusy || document.body.dataset.generating || isChatSaving || scanInProgress) {
+            queueAutoScan(chatForScan);
+            return;
+        }
         scanInProgress = true;
         autoStatus = 'scanning';
         renderMapWidget();
@@ -535,6 +535,57 @@ function queueAutoScan(chatForScan, queuedAt = Date.now()) {
             if (isSameChat(chatForScan, SillyTavern.getContext())) renderMapWidget();
         }
     }, 1500);
+}
+
+function handleGenerationStarted(type) {
+    generationBusy = true;
+    generationStopped = false;
+    const context = SillyTavern.getContext();
+    const last = context.chat?.at(-1);
+    generationSnapshot = type === 'quiet' || type === 'impersonate' ? null : {
+        context, last, text: last?.mes, finished: last?.gen_finished,
+    };
+}
+
+function handleMessageReceived(messageId, type) {
+    if (!settings.autoUpdate || generationStopped || type === 'first_message' || type === 'extension') return;
+    const chatForReply = SillyTavern.getContext();
+    const message = chatForReply.chat?.[messageId];
+    if (!message || message.is_user || !message.mes) return;
+    pendingReply = chatForReply;
+    if (!generationBusy) {
+        queueAutoScan(pendingReply);
+        pendingReply = null;
+    }
+}
+
+function handleGenerationEnded() {
+    generationBusy = false;
+    if (pendingReply) queueAutoScan(pendingReply);
+    else if (settings.autoUpdate && !generationStopped && generationSnapshot
+        && isSameChat(generationSnapshot.context, SillyTavern.getContext())) {
+        const latest = SillyTavern.getContext().chat?.at(-1);
+        if (latest && !latest.is_user && latest.mes
+            && (latest !== generationSnapshot.last || latest.mes !== generationSnapshot.text
+                || latest.gen_finished !== generationSnapshot.finished)) {
+            queueAutoScan(generationSnapshot.context);
+        }
+    }
+    pendingReply = null;
+    generationSnapshot = null;
+}
+
+function handleGenerationStopped() {
+    generationBusy = false;
+    generationStopped = true;
+    clearTimeout(autoScanTimer);
+    autoScanTimer = null;
+    pendingReply = null;
+    generationSnapshot = null;
+    if (autoStatus === 'waiting') {
+        autoStatus = 'idle';
+        renderMapWidget();
+    }
 }
 
 function setupExtensionSettings(rebuild = false) {
@@ -686,13 +737,8 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         renderMapWidget();
     });
-    select(mapTools, tr('Минимальный интервал, минут', 'Minimum interval, minutes'), String(settings.autoUpdateMinutes),
-        [[1, '1'], [5, '5'], [10, '10'], [30, '30']], value => {
-            settings.autoUpdateMinutes = Number(value);
-            saveSettingsDebounced();
-        });
-    note(mapTools, tr('Каждое обновление расходует один запрос к выбранной модели. Карта меняется только после вашего подтверждения.',
-        'Each update uses one request to the selected model. The map changes only after you confirm it.'));
+    note(mapTools, tr('После завершённой реплики — один запрос к выбранной модели. Пока предложение ждёт проверки, новые запросы не запускаются. Карта сохраняется только после подтверждения.',
+        'A completed reply uses one request to the selected model. No new requests run while a proposal awaits review. The map is saved only after confirmation.'));
     const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {
         void triggerMapScan(scan, settings.scanScale);
     });
@@ -887,7 +933,8 @@ function renderMapWidget() {
             <span class="bb-map-widget-signal" aria-hidden="true"></span>
             <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
             ${autoStatus !== 'idle' && settings.autoUpdate ? `<span class="bb-map-widget-badge" aria-live="polite">${autoStatus === 'scanning'
-                ? tr('СКАН', 'SCAN') : autoStatus === 'ready' ? tr('НОВОЕ', 'NEW') : tr('СБОЙ', 'ERROR')}</span>` : ''}
+                ? tr('СКАН', 'SCAN') : autoStatus === 'waiting' ? tr('ЖДЁТ', 'WAIT')
+                    : autoStatus === 'ready' ? tr('НОВОЕ', 'NEW') : tr('СБОЙ', 'ERROR')}</span>` : ''}
             <button type="button" class="bb-map-widget-toggle" aria-label="${settings.widgetCollapsed ? tr('Развернуть карту', 'Expand map') : tr('Свернуть карту', 'Collapse map')}" aria-expanded="${!settings.widgetCollapsed}">${settings.widgetCollapsed ? '▣' : '−'}</button>
         </div>
         <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
@@ -902,6 +949,8 @@ function renderMapWidget() {
             </div>
             ${settings.autoUpdate && autoStatus !== 'idle' ? `<div class="bb-map-widget-update" role="status">${autoStatus === 'scanning'
                 ? tr('Готовится обновление карты…', 'Preparing a map update…')
+                : autoStatus === 'waiting'
+                    ? tr('Ожидает завершения реплики…', 'Waiting for the reply to finish…')
                 : autoStatus === 'ready'
                     ? tr('Обновление готово к проверке', 'Update ready for review')
                     : tr('Не удалось подготовить обновление', 'Could not prepare an update')}</div>` : ''}
@@ -1010,33 +1059,10 @@ jQuery(async () => {
             renderMapWidget();
             setupExtensionSettings(true);
         });
-        eventSource.on(event_types.GENERATION_STARTED, () => {
-            generationBusy = true;
-            generationStopped = false;
-        });
-        eventSource.on(event_types.MESSAGE_RECEIVED, (messageId, type) => {
-            if (!settings.autoUpdate || generationStopped || type === 'first_message' || type === 'extension') return;
-            const chatForReply = SillyTavern.getContext();
-            const message = chatForReply.chat?.[messageId];
-            if (!message || message.is_user || !message.gen_finished) return;
-            pendingReply = chatForReply;
-            if (!generationBusy) {
-                queueAutoScan(pendingReply);
-                pendingReply = null;
-            }
-        });
-        eventSource.on(event_types.GENERATION_ENDED, () => {
-            generationBusy = false;
-            if (pendingReply) queueAutoScan(pendingReply);
-            pendingReply = null;
-        });
-        eventSource.on(event_types.GENERATION_STOPPED, () => {
-            generationBusy = false;
-            generationStopped = true;
-            clearTimeout(autoScanTimer);
-            autoScanTimer = null;
-            pendingReply = null;
-        });
+        eventSource.on(event_types.GENERATION_STARTED, handleGenerationStarted);
+        eventSource.on(event_types.MESSAGE_RECEIVED, handleMessageReceived);
+        eventSource.on(event_types.GENERATION_ENDED, handleGenerationEnded);
+        eventSource.on(event_types.GENERATION_STOPPED, handleGenerationStopped);
         window.addEventListener('resize', () => {
             if (document.getElementById('bb-map-widget')) renderMapWidget();
         });
