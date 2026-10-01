@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat } from './map-state.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 
@@ -213,7 +213,7 @@ function injectCurrentMapContext() {
     }
 }
 
-function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext().chat) {
+function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext()) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -373,7 +373,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     if (!isSavedMap) {
         saveBtn.onclick = function() {
             try {
-                if (!chat_metadata || SillyTavern.getContext().chat !== chatForMap) {
+                if (!chat_metadata || !isSameChat(chatForMap, SillyTavern.getContext())) {
                     throw new Error(tr('Чат сменился. Запустите скан ещё раз.', 'The chat changed. Please scan again.'));
                 }
                 chat_metadata['bb_map_data'] = createSavedMap(data, getMapDataForCurrentChat());
@@ -407,7 +407,8 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
 
 async function triggerMapScan(btnElement, scaleMode = 'local') {
     if (btnElement.disabled) return;
-    const chat = SillyTavern.getContext().chat;
+    const chatForScan = SillyTavern.getContext();
+    const chat = chatForScan.chat;
     if (!chat || chat.length === 0) {
         // @ts-ignore
         return toastr.warning(tr('Чат пуст. Карту пока нельзя создать.', 'The chat is empty. A map cannot be created yet.'), 'BB Map');
@@ -440,12 +441,12 @@ async function triggerMapScan(btnElement, scaleMode = 'local') {
             
         let result = await generateMapFast(prompt);
         
-        if (SillyTavern.getContext().chat !== chat) {
+        if (!isSameChat(chatForScan, SillyTavern.getContext())) {
             toastr.warning(tr('Чат сменился во время сканирования. Результат не сохранён.', 'The chat changed during the scan. The result was discarded.'), 'BB Map');
             return;
         }
         const data = normalizeMapData(extractJSON(result), getMapDataForCurrentChat()?.raw);
-        showRadarModal(data, false, chat);
+        showRadarModal(data, false, chatForScan);
     } catch (err) {
         // @ts-ignore
         const message = err?.message === 'invalid_map'
@@ -591,7 +592,7 @@ function setupExtensionSettings(rebuild = false) {
 
     // Keep map management in settings; the saved-map widget is the only chat control.
     const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');
-    const chatForTools = SillyTavern.getContext().chat;
+    const chatForTools = SillyTavern.getContext();
     const savedMap = getMapDataForCurrentChat();
     note(mapTools, savedMap?.context
         ? tr('Память локации активна.', 'Location memory is active.')
@@ -605,11 +606,11 @@ function setupExtensionSettings(rebuild = false) {
         void triggerMapScan(scan, settings.scanScale);
     });
     if (savedMap?.raw) action(mapTools, tr('Открыть сохранённую карту', 'Open saved map'), () => {
-        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         showRadarModal(getMapDataForCurrentChat().raw, true);
     });
     if (savedMap?.previous?.raw) action(mapTools, tr('Восстановить предыдущую карту', 'Restore previous map'), () => {
-        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         const restored = restorePreviousMap(getMapDataForCurrentChat());
         if (!restored || !chat_metadata) return;
         chat_metadata.bb_map_data = restored;
@@ -620,7 +621,7 @@ function setupExtensionSettings(rebuild = false) {
         toastr.success(tr('Предыдущая карта восстановлена.', 'Previous map restored.'), 'BB Map');
     });
     const view = action(mapTools, tr('Посмотреть текст памяти', 'View memory text'), () => {
-        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         memoryText.textContent = getMapDataForCurrentChat()?.context || tr('Память карты пуста.', 'Map memory is empty.');
         memoryText.hidden = !memoryText.hidden;
         view.setAttribute('aria-expanded', String(!memoryText.hidden));
@@ -631,7 +632,7 @@ function setupExtensionSettings(rebuild = false) {
     memoryText.hidden = true;
     mapTools.append(memoryText);
     if (savedMap) action(mapTools, tr('Очистить текст памяти', 'Clear memory text'), () => {
-        if (SillyTavern.getContext().chat !== chatForTools) return setupExtensionSettings(true);
+        if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         delete chat_metadata.bb_map_data;
         saveChatDebounced();
         injectCurrentMapContext();

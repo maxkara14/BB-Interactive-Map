@@ -1,5 +1,13 @@
 export const MAP_DATA_VERSION = 2;
 
+export function isSameChat(initial, current) {
+    return initial?.chatId != null
+        && initial.chatId === current?.chatId
+        && initial.characterId === current.characterId
+        && initial.groupId === current.groupId
+        && initial.chatMetadata === current.chatMetadata;
+}
+
 const POSITIONS = new Set(['center', 'north', 'south', 'east', 'west', 'northwest', 'northeast', 'southwest', 'southeast']);
 const THREAT_RANK = { safe: 0, tension: 1, danger: 2 };
 

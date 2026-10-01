@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeMapData, createSavedMap, restorePreviousMap, buildMapContextString } from '../map-state.js';
+import { normalizeMapData, createSavedMap, restorePreviousMap, buildMapContextString, isSameChat } from '../map-state.js';
+
+test('chat guard rejects a different chat even when SillyTavern reuses the message array', () => {
+    const messages = [];
+    const first = { chatId: 'first', characterId: 1, groupId: null, chatMetadata: {}, chat: messages };
+    const second = { ...first, chatId: 'second', chatMetadata: {} };
+    assert.equal(isSameChat(first, first), true);
+    assert.equal(isSameChat(first, second), false);
+    assert.equal(first.chat, second.chat);
+});
+
+test('chat guard rejects a reloaded chat and an unselected chat', () => {
+    const first = { chatId: 'first', characterId: 1, groupId: null, chatMetadata: {} };
+    assert.equal(isSameChat(first, { ...first, chatMetadata: {} }), false);
+    assert.equal(isSameChat({ ...first, chatId: undefined }, first), false);
+});
 
 const zone = (position, extras = {}) => ({
     position,
