@@ -39,7 +39,7 @@ test('profile source sends an English JSON request and reads the result', async 
             assert.equal(messages[0].role, 'system');
             assert.match(messages[0].content, /JSON/);
             assert.equal(messages[1].content, 'Map this scene');
-            assert.equal(maxTokens, 4000);
+            assert.equal(maxTokens, 10000);
             assert.equal(options.stream, false);
             assert.equal(options.includePreset, true);
             return { content: '{"zones":[]}' };
@@ -61,11 +61,13 @@ test('missing profile fails before sending a request', async () => {
 
 test('main source uses SillyTavern generation', async () => {
     let requestedPrompt;
+    let responseLength;
     const map = loadMap({ generationSource: 'main' }, null,
         async () => { throw new Error('Custom API must not be called'); },
-        async params => { requestedPrompt = params.quietPrompt; return '{"main":true}'; });
+        async params => { requestedPrompt = params.quietPrompt; responseLength = params.responseLength; return '{"main":true}'; });
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
     assert.equal(requestedPrompt, 'Map this scene');
+    assert.equal(responseLength, 10000);
 });
 
 test('empty profile result is rejected', async () => {
@@ -90,6 +92,7 @@ test('Custom API source sends the selected model and reads the result', async ()
             const payload = JSON.parse(options.body);
             assert.equal(payload.model, 'model-1');
             assert.equal(payload.messages[1].content, 'Map this scene');
+            assert.equal(payload.max_tokens, 10000);
             return { ok: true, json: async () => ({ choices: [{ message: { content: '{"zones":[]}' } }] }) };
         });
     assert.equal(await map.generateMapFast('Map this scene'), '{"zones":[]}');

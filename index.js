@@ -5,6 +5,7 @@ import { extension_settings } from '../../../extensions.js';
 import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat } from './map-state.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
+const MAP_MAX_TOKENS = 10000;
 
 if (!extension_settings[MODULE_NAME]) {
     extension_settings[MODULE_NAME] = {
@@ -98,9 +99,9 @@ Recent chat: """{{lastMessages}}"""
 
 async function runMainGen(promptText) {
     if (typeof generateQuietPrompt === 'function') {
-        return await generateQuietPrompt({ quietPrompt: promptText });
+        return await generateQuietPrompt({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
     } else if (typeof window['generateQuietPrompt'] === 'function') {
-        return await window['generateQuietPrompt']({ quietPrompt: promptText });
+        return await window['generateQuietPrompt']({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
     } else {
         throw new Error(tr('Функция генерации SillyTavern недоступна.', 'SillyTavern generation is unavailable.'));
     }
@@ -129,7 +130,7 @@ async function runProfileGen(promptText) {
     try {
         response = await service.sendRequest(settings.connectionProfileId,
             [{ role: 'system', content: 'Generate only the requested JSON map.' }, { role: 'user', content: promptText }],
-            4000, { stream: false, extractData: true, includePreset: true, includeInstruct: true });
+            MAP_MAX_TOKENS, { stream: false, extractData: true, includePreset: true, includeInstruct: true });
     } catch {
         throw new Error(tr('Запрос через профиль не удался.', 'The profile request failed.'));
     }
@@ -164,7 +165,7 @@ async function generateMapFast(promptText) {
                         { role: 'user', content: promptText }
                     ],
                     temperature: 0.7,
-                    max_tokens: 4000,
+                    max_tokens: MAP_MAX_TOKENS,
                     stream: false
                 })
             });
