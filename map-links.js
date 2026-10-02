@@ -3,12 +3,16 @@ import { poiName } from './map-state.js';
 const MARKER = 'data-bb-map-mention';
 const SKIP = `a, button, input, textarea, select, label, summary, pre, code, script, style, svg, math, [hidden], [aria-hidden="true"], [contenteditable], [role="button"], [${MARKER}]`;
 const escapedPattern = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+// Match visual separators without rewriting text or changing DOM offsets.
+const separators = '[\\s\\u3164\\uFFA0\\u2800\\u200B]';
+const mentionKey = text => text.replace(new RegExp(`${separators}+`, 'gu'), ' ').trim().toLowerCase();
 
 export function createMapMentionIndex(raw) {
     const groups = new Map();
-    const add = entry => {
+    const add = (entry, name = entry.name) => {
         if (!entry.name) return;
-        const key = entry.name.toLowerCase();
+        const key = mentionKey(name);
+        if (!key) return;
         groups.set(key, [...(groups.get(key) || []), entry]);
     };
     for (const zone of Array.isArray(raw?.zones) ? raw.zones : []) {
@@ -20,23 +24,38 @@ export function createMapMentionIndex(raw) {
             add({ type: 'object', name: poiName(value), description: value?.description || '', ...location });
         }
         for (const value of Array.isArray(zone.characters) ? zone.characters : []) {
-            add({ type: 'character', name: poiName(value), description: value?.description || '',
-                mood: value?.mood || '', attitude: value?.attitude || '', ...location });
+            const entry = { type: 'character', name: poiName(value), description: value?.description || '',
+                mood: value?.mood || '', attitude: value?.attitude || '', ...location };
+            add(entry);
+            const parts = mentionKey(entry.name).split(' ');
+            if (parts.length > 1) {
+                for (const part of new Set([parts[0], parts.at(-1)])) {
+                    if (/^[\p{L}\p{M}]{2,}$/u.test(part)) add(entry, part);
+                }
+            }
         }
     }
     const entries = new Map([...groups].filter(([, values]) => values.length === 1).map(([key, values]) => [key, values[0]]));
     // Ambiguous long names still block shorter matches inside their phrase.
-    const names = [...groups.values()].map(values => values[0].name).sort((a, b) => b.length - a.length);
+    const names = [...groups.keys()].sort((a, b) => b.length - a.length);
     // Unicode boundaries also work for Cyrillic; a hyphenated word is not a partial match.
     const word = '[\\p{L}\\p{M}\\p{N}_-]';
-    const pattern = entries.size ? new RegExp(`(?<!${word})(?:${names.map(escapedPattern).join('|')})(?!${word})`, 'giu') : null;
+    const left = `(?:(?<!${word})|(?<=[\\u3164\\uFFA0]))`;
+    const right = `(?:(?!${word})|(?=[\\u3164\\uFFA0]))`;
+    const honorific = `(?=-(?:сан|сама|кун|чан|сенсей|san|sama|kun|chan|sensei)${right})`;
+    const alternatives = names.map(name => {
+        const phrase = name.split(' ').map(escapedPattern).join(`${separators}+`);
+        const ending = entries.get(name)?.type === 'character' ? `(?:${right}|${honorific})` : right;
+        return `${phrase}${ending}`;
+    });
+    const pattern = entries.size ? new RegExp(`${left}(?:${alternatives.join('|')})`, 'giu') : null;
     return { entries, pattern };
 }
 
 export function findMapMentions(text, index) {
     if (!index.pattern) return [];
-    return [...text.matchAll(index.pattern)].filter(match => index.entries.has(match[0].toLowerCase())).map(match => ({
-        start: match.index, end: match.index + match[0].length, text: match[0], key: match[0].toLowerCase(),
+    return [...text.matchAll(index.pattern)].filter(match => index.entries.has(mentionKey(match[0]))).map(match => ({
+        start: match.index, end: match.index + match[0].length, text: match[0], key: mentionKey(match[0]),
     }));
 }
 

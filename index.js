@@ -916,8 +916,8 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         chatMapLinks?.refresh();
     });
-    note(general, tr('Нажмите на подсвеченное имя, предмет или зону для описания. Поиск использует полные названия сохранённой карты; повторяющиеся имена пропускаются.',
-        'Click a highlighted name, object, or zone for its description. Matches use full names from the saved map; repeated names are skipped.'));
+    note(general, tr('Нажмите на подсвеченное имя, предмет или зону для описания. Для персонажей также распознаются однозначные имя и фамилия; неоднозначные упоминания пропускаются.',
+        'Click a highlighted name, object, or zone for its description. Unique character first and last names also match; ambiguous mentions are skipped.'));
 
     // Map management stays in extension settings.
     const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');

@@ -43,3 +43,27 @@ test('an ambiguous long name blocks a shorter entity name inside it', () => {
     ] });
     assert.deepEqual(findMapMentions('Медный ключ и Ключ.', index).map(match => match.text), ['Ключ']);
 });
+
+test('character short names, surnames and honorifics match across visual separators without changing offsets', () => {
+    const index = createMapMentionIndex({ zones: [{ name: 'Зал', poi: ['Кедровые половицы'], characters: [
+        { name: 'Ибуки Куробати' }, { name: 'Танджиро Камадо' }, { name: 'Аой Кандзаки' },
+    ] }] });
+    const text = '🔑 ВоздухㅤТанджироㅤИбукиㅤКамадо,ㅤКуробати!ㅤАой-санㅤИбуки-сан. Кандзаки. Кедровыеㅤполовицы.';
+    const matches = findMapMentions(text, index);
+    assert.deepEqual(matches.map(match => match.text), ['Танджиро', 'Ибуки', 'Камадо', 'Куробати', 'Аой', 'Ибуки', 'Кандзаки', 'Кедровыеㅤполовицы']);
+    assert.equal(index.entries.get(matches[0].key).name, 'Танджиро Камадо');
+    for (const match of matches) assert.equal(text.slice(match.start, match.end), match.text);
+    for (const separator of [' ', '\u00a0', 'ㅤ', '\uffa0', '\u2800', '\u200b', '\t']) {
+        const full = `Ибуки${separator}Куробати`;
+        assert.deepEqual(findMapMentions(full, index).map(match => match.text), [full]);
+    }
+    assert.deepEqual(findMapMentions('Ибукина Ибуки-подделка Аой-санка Куробатиным', index), []);
+});
+
+test('short aliases remain ambiguous across characters, objects and zones', () => {
+    const index = createMapMentionIndex({ zones: [{ name: 'Мира', poi: ['Куробати', 'Ключ'], characters: [
+        { name: 'Ибуки Куробати' }, { name: 'Ибуки Камадо' }, { name: 'Мира Даль' },
+    ] }] });
+    assert.deepEqual(findMapMentions('Ибуки Куробати; Ибуки, Куробати, Мира, Камадо, Даль. Ключ-сан.', index).map(match => match.text),
+        ['Ибуки Куробати', 'Камадо', 'Даль']);
+});

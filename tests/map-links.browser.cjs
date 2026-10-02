@@ -154,6 +154,21 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
             if (width === 768) await page.keyboard.press('Escape');
         }
         if (screenshots) await page.screenshot({ path: path.join(screenshots, 'map-mentions-mobile.png') });
+        await page.evaluate(() => {
+            chat_metadata.bb_map_data = createSavedMap(normalizeMapData({ schematic_name: 'Додзё', zones: [
+                { position: 'center', name: 'Зал', poi: ['Кедровые половицы'], characters: [
+                    { name: 'Ибуки Куробати' }, { name: 'Танджиро Камадо' }, { name: 'Аой Кандзаки' },
+                ] },
+            ] }));
+            document.getElementById('new-reply').textContent = 'ТанджироㅤИбукиㅤАой-сан. ИбукиㅤКуробати. Кедровыеㅤполовицы.';
+            renderMapWidget();
+        });
+        await page.waitForFunction(() => document.querySelectorAll('#new-reply [data-bb-map-mention]').length === 5);
+        assert.equal(await page.locator('#new-reply').textContent(), 'ТанджироㅤИбукиㅤАой-сан. ИбукиㅤКуробати. Кедровыеㅤполовицы.');
+        await page.getByRole('button', { name: 'Character: Аой Кандзаки', exact: true }).click();
+        assert.match(await page.locator('#bb-map-mention-card').innerText(), /Аой Кандзаки/);
+        await page.keyboard.press('Escape');
+        assert.equal(await page.getByRole('button', { name: 'Character: Ибуки Куробати', exact: true }).count(), 2);
         await page.evaluate(() => chatMapLinks.destroy());
         assert.equal(await mentions.count(), 0);
         assert.equal(await page.locator('.mes_text').first().textContent(), initialText);
