@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeMapData, createSavedMap, restorePreviousMap, buildMapContextString, isSameChat } from '../map-state.js';
+import { normalizeMapData, createSavedMap, restorePreviousMap, buildMapContextString, isSameChat, getMapChanges } from '../map-state.js';
 
 test('chat guard rejects a different chat even when SillyTavern reuses the message array', () => {
     const messages = [];
@@ -93,4 +93,41 @@ test('saving a new scan preserves one legacy snapshot for recovery', () => {
     assert.equal(restored.raw, old.raw);
     assert.equal(restored.previous.raw, candidate);
     assert.equal(restorePreviousMap(restored).raw, candidate);
+});
+
+test('review detects moves and fact changes without changing saved data', () => {
+    const previous = normalizeMapData({ schematic_name: 'House', atmosphere: 'Morning', zones: [
+        zone('center', { poi: ['Key'], characters: [{ name: 'Mira', mood: 'Calm' }] }), zone('north'),
+    ] });
+    const snapshot = JSON.stringify(previous);
+    const next = normalizeMapData({ schematic_name: 'House', atmosphere: 'Night', zones: [
+        zone('center', { threat_level: 'danger', threat_reason: 'Fire' }),
+        zone('north', { poi: ['Key', 'Lamp'], characters: [{ name: 'Mira', mood: 'Alert' }] }),
+    ] }, previous);
+    const changes = getMapChanges(previous, next);
+    assert.ok(changes.some(change => change.type === 'scene' && change.fields[0].key === 'atmosphere'));
+    assert.ok(changes.some(change => change.type === 'zone' && change.fields.some(field => field.key === 'threat_level')));
+    const mira = changes.find(change => change.name === 'Mira');
+    assert.equal(mira.action, 'moved');
+    assert.equal(mira.from, 'center');
+    assert.equal(mira.to, 'north');
+    assert.deepEqual(mira.fields, [{ key: 'mood', before: 'Calm', after: 'Alert' }]);
+    assert.equal(changes.find(change => change.name === 'Lamp').action, 'added');
+    assert.equal(JSON.stringify(previous), snapshot);
+    assert.deepEqual(getMapChanges(next, next), []);
+});
+
+test('review reads legacy items and reports removals without inventing moves for repeated names', () => {
+    const previous = { schematic_name: 'House', zones: [zone('center', { poi: ['Key', 'Lamp'] }), zone('north', { poi: ['Key'] })] };
+    const next = normalizeMapData({ schematic_name: 'House', zones: [zone('center', { poi: ['Key'] }), zone('south', { poi: ['Key'] })] });
+    const changes = getMapChanges(previous, next);
+    assert.equal(changes.find(change => change.name === 'Lamp').action, 'removed');
+    const keys = changes.filter(change => change.name === 'Key');
+    assert.equal(keys.length, 1);
+    assert.equal(keys[0].ambiguous, true);
+    assert.notEqual(keys[0].action, 'moved');
+    assert.deepEqual(getMapChanges(previous, normalizeMapData(previous)), []);
+    const addedKeys = getMapChanges(null, next).find(change => change.name === 'Key');
+    assert.equal(addedKeys.action, 'added');
+    assert.equal(addedKeys.ambiguous, false);
 });

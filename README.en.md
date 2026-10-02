@@ -9,6 +9,8 @@ A scene map and spatial memory extension for SillyTavern. It scans recent chat m
 - Room and building scale maps with characters, objects, atmosphere, and threat levels.
 - Saved map memory per chat, injected into the model context by default.
 - A new scan stays a preview until you save it. The previous saved map can be restored in extension settings.
+- The preview lists changes to zones, threats, characters, and objects. Repeated names are marked as ambiguous.
+- **Edit map** opens fields for the location, atmosphere, and existing zones. Correct descriptions and threats, add or remove objects and characters, or move them to another existing zone. Edits return to the preview and are written only when you save.
 - Existing maps still open; new records include short character and object descriptions.
 - A saved map appears in a collapsible chat widget. Drag its header or focus it and use arrow keys to move it; position and collapsed state are saved in settings.
 - The chat widget shows a mini map and opens the full map. Scan and manage memory in the **Current chat map** section of extension settings.

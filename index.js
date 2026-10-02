@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges } from './map-state.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
@@ -225,6 +225,56 @@ function injectCurrentMapContext() {
     }
 }
 
+function mapFieldLabel(key) {
+    const labels = {
+        schematic_name: ['Локация', 'Location'], atmosphere: ['Атмосфера', 'Atmosphere'],
+        name: ['Название', 'Name'], summary: ['Описание зоны', 'Zone description'],
+        threat_level: ['Угроза', 'Threat'], threat_reason: ['Причина угрозы', 'Threat reason'],
+        description: ['Описание', 'Description'], mood: ['Состояние', 'Mood'],
+        attitude: ['Отношение', 'Attitude'], thought: ['Мысль', 'Thought'],
+    };
+    return tr(...labels[key]);
+}
+
+function mapPositionLabel(position) {
+    const labels = {
+        center: ['Центр', 'Center'], north: ['Север', 'North'], south: ['Юг', 'South'],
+        east: ['Восток', 'East'], west: ['Запад', 'West'], northwest: ['Северо-запад', 'Northwest'],
+        northeast: ['Северо-восток', 'Northeast'], southwest: ['Юго-запад', 'Southwest'], southeast: ['Юго-восток', 'Southeast'],
+    };
+    return labels[position] ? tr(...labels[position]) : '';
+}
+
+function mapThreatLabel(value) {
+    return value === 'danger' ? tr('Опасность', 'Danger')
+        : value === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
+}
+
+function mapChangesHtml(previous, next) {
+    const changes = getMapChanges(previous, next);
+    const actions = { added: ['Добавлено', 'Added'], removed: ['Убрано с карты', 'Removed from map'],
+        moved: ['Перемещение', 'Moved'], changed: ['Изменено', 'Changed'] };
+    const types = { scene: ['Сцена', 'Scene'], zone: ['Зона', 'Zone'], character: ['Персонаж', 'Character'], object: ['Предмет', 'Object'] };
+    const zoneLabel = (raw, position) => {
+        const zone = raw?.zones?.find(zone => zone.position === position);
+        return [zone?.name, mapPositionLabel(position)].filter(Boolean).join(' · ');
+    };
+    const locations = (raw, positions) => (Array.isArray(positions) ? positions : [positions])
+        .filter(Boolean).map(position => zoneLabel(raw, position)).join('; ') || '—';
+    return `<details class="bb-map-review" open>
+        <summary>${tr('Изменения карты', 'Map changes')} <span>${changes.length}</span></summary>
+        <p>${tr('Сравнение с сохранённой картой. Удаление с карты не означает, что объект исчез из истории.',
+            'Compared with the saved map. Removal from the map does not mean an entity disappeared from the story.')}</p>
+        ${changes.length ? `<ul>${changes.map(change => `<li class="bb-map-change bb-map-change-${change.action}">
+            <div><span class="bb-map-change-action">${tr(...actions[change.action])}</span> ${tr(...types[change.type])} · <strong>${escapeHtml(change.name)}</strong></div>
+            ${change.position ? `<small>${escapeHtml(mapPositionLabel(change.position))}</small>` : ''}
+            ${change.from || change.to ? `<div class="bb-map-change-values"><span>${escapeHtml(locations(previous, change.from))}</span><b>→</b><span>${escapeHtml(locations(next, change.to))}</span></div>` : ''}
+            ${change.ambiguous ? `<p class="bb-map-change-warning">${tr('Имя повторяется. Нельзя однозначно определить, какая запись изменилась.', 'Repeated name. The changed entry cannot be identified unambiguously.')}</p>` : ''}
+            ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.before) : field.before || '—')}</span><b>→</b><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.after) : field.after || '—')}</span></div></div>`).join('')}
+        </li>`).join('')}</ul>` : `<p>${tr('Изменений нет.', 'No changes.')}</p>`}
+    </details>`;
+}
+
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
@@ -339,8 +389,11 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 <span style="opacity:0.5;">${tr('[ОЖИДАНИЕ] Наведите курсор или нажмите для выбора...', '[READY] Hover or click to select...')}</span>
             </div>
 
+            ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
+
             <div class="bb-map-controls">
                 ${saveBtnHtml}
+                <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button>
                 <button class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button>
             </div>
         </div>
@@ -382,6 +435,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     });
 
     const saveBtn = document.getElementById('bb-map-save-btn');
+    overlay.querySelector('#bb-map-edit-btn').onclick = () => showMapEditor(data, isSavedMap, chatForMap, expectedMap);
     if (!isSavedMap) {
         saveBtn.onclick = function() {
             try {
@@ -410,6 +464,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
 
             saveBtn.textContent = `✅ ${tr('КАРТА СОХРАНЕНА!', 'MAP SAVED!')}`;
             saveBtn.disabled = true;
+            overlay.querySelector('#bb-map-edit-btn').disabled = true;
             saveBtn.style.background = "rgba(74, 222, 128, 0.3)";
             saveBtn.style.borderColor = "#4ade80";
             saveBtn.style.color = "#4ade80";
@@ -422,6 +477,132 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         overlay.style.opacity = '0';
         setTimeout(() => overlay.remove(), 300);
     };
+}
+
+function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
+    document.getElementById('bb-map-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'bb-map-overlay';
+    overlay.className = 'bb-map-overlay';
+    overlay.style.opacity = '1';
+    overlay.innerHTML = `<form class="bb-map-modal bb-map-editor">
+        <div class="bb-map-header-container"><div class="bb-map-title">${tr('ПРАВКА КАРТЫ', 'EDIT MAP')}</div>
+        <p>${tr('Правки появятся в предпросмотре. Для записи в чат сохраните карту.', 'Edits appear in the preview. Save the map to write them to the chat.')}</p></div>
+        <div class="bb-map-edit-fields"></div><div class="bb-map-edit-zones"></div>
+        <p class="bb-map-edit-error" role="alert" hidden></p>
+        <div class="bb-map-controls"><button class="bb-map-btn bb-btn-save" type="submit">${tr('ПРОВЕРИТЬ ПРАВКИ', 'PREVIEW EDITS')}</button>
+        <button class="bb-map-btn" type="button" data-cancel>${tr('ОТМЕНИТЬ ПРАВКИ', 'CANCEL EDITS')}</button></div>
+    </form>`;
+    const form = overlay.querySelector('form');
+    const field = (target, key, value, options = null, required = false, label = mapFieldLabel(key)) => {
+        const wrapper = document.createElement('label');
+        wrapper.textContent = label;
+        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere'].includes(key) ? 'textarea' : 'input');
+        if (options) for (const [optionValue, text] of options) {
+            const option = document.createElement('option');
+            option.value = optionValue;
+            option.textContent = text;
+            input.append(option);
+        }
+        input.name = key;
+        input.value = value || '';
+        input.required = required;
+        if (input.tagName === 'TEXTAREA') input.rows = 2;
+        wrapper.append(input);
+        target.append(wrapper);
+        return input;
+    };
+    const scene = form.querySelector('.bb-map-edit-fields');
+    field(scene, 'schematic_name', data.schematic_name, null, true);
+    field(scene, 'atmosphere', data.atmosphere);
+    const destinations = data.zones.map((zone, index) => [String(index), `${zone.name} · ${mapPositionLabel(zone.position)}`]);
+    const addEntity = (target, type, entry, zoneIndex) => {
+        const block = document.createElement('fieldset');
+        block.dataset.entityType = type;
+        const legend = document.createElement('legend');
+        legend.textContent = type === 'character' ? tr('Персонаж', 'Character') : tr('Предмет', 'Object');
+        block.append(legend);
+        field(block, 'name', poiName(entry), null, true);
+        field(block, 'description', entry?.description);
+        field(block, 'destination', String(zoneIndex), destinations, false, tr('Зона', 'Zone'));
+        if (type === 'character') for (const key of ['mood', 'attitude', 'thought']) field(block, key, entry?.[key]);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'bb-map-edit-remove';
+        remove.textContent = tr('Убрать с карты', 'Remove from map');
+        remove.onclick = () => block.remove();
+        block.append(remove);
+        target.append(block);
+        return block;
+    };
+    data.zones.forEach((zone, index) => {
+        const section = document.createElement('details');
+        section.className = 'bb-map-edit-zone';
+        section.dataset.zoneIndex = index;
+        section.open = index === 0;
+        section.innerHTML = `<summary>${escapeHtml(zone.name)} <small>${mapPositionLabel(zone.position)}</small></summary><div class="bb-map-edit-zone-body"></div>`;
+        const body = section.querySelector('.bb-map-edit-zone-body');
+        field(body, 'name', zone.name, null, true);
+        field(body, 'summary', zone.summary);
+        field(body, 'threat_level', zone.threat_level || 'safe', ['safe', 'tension', 'danger'].map(value => [value, mapThreatLabel(value)]));
+        field(body, 'threat_reason', zone.threat_reason);
+        const entities = document.createElement('div');
+        entities.className = 'bb-map-edit-entities';
+        body.append(entities);
+        for (const entry of zone.poi || []) addEntity(entities, 'object', entry, index);
+        for (const entry of zone.characters || []) addEntity(entities, 'character', entry, index);
+        const actions = document.createElement('div');
+        actions.className = 'bb-map-edit-actions';
+        for (const [type, label] of [['object', tr('+ Предмет', '+ Object')], ['character', tr('+ Персонаж', '+ Character')]]) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'bb-map-btn';
+            button.textContent = label;
+            button.onclick = () => addEntity(entities, type, {}, index).querySelector('input').focus();
+            actions.append(button);
+        }
+        body.append(actions);
+        form.querySelector('.bb-map-edit-zones').append(section);
+    });
+    const cancel = () => {
+        showRadarModal(data, isSavedMap, chatForMap, expectedMap);
+        document.getElementById('bb-map-edit-btn')?.focus();
+    };
+    form.querySelector('[data-cancel]').onclick = cancel;
+    overlay.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+    });
+    form.addEventListener('invalid', event => {
+        event.target.closest('.bb-map-edit-zone')?.setAttribute('open', '');
+    }, true);
+    form.onsubmit = event => {
+        event.preventDefault();
+        try {
+            if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap) {
+                throw new Error(tr('Чат или сохранённая карта изменились. Откройте карту заново.', 'The chat or saved map changed. Reopen the map.'));
+            }
+            const readFields = target => Object.fromEntries([...target.querySelectorAll(':scope > label > input, :scope > label > textarea, :scope > label > select')]
+                .map(input => [input.name, input.value]));
+            const draft = { ...readFields(scene), zones: [...form.querySelectorAll('.bb-map-edit-zone')].map((section, index) => ({
+                ...readFields(section.querySelector('.bb-map-edit-zone-body')), position: data.zones[index].position, poi: [], characters: [],
+            })) };
+            for (const block of form.querySelectorAll('[data-entity-type]')) {
+                const { destination, ...entry } = readFields(block);
+                draft.zones[Number(destination)][block.dataset.entityType === 'character' ? 'characters' : 'poi'].push(entry);
+            }
+            const edited = normalizeMapData(draft, expectedMap?.raw);
+            if (autoCandidate === data) autoCandidate = edited;
+            showRadarModal(edited, false, chatForMap, expectedMap);
+        } catch (error) {
+            const message = form.querySelector('.bb-map-edit-error');
+            message.hidden = false;
+            message.textContent = error.message === 'invalid_map'
+                ? tr('Проверьте названия зон, персонажей и предметов.', 'Check the zone, character, and object names.') : error.message;
+            message.scrollIntoView({ block: 'nearest' });
+        }
+    };
+    document.body.append(overlay);
+    scene.querySelector('input').focus();
 }
 
 async function createMapCandidate(chatForScan, scaleMode) {

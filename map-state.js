@@ -152,6 +152,72 @@ export function createSavedMap(raw, current = null) {
     };
 }
 
+// Compare visible facts, not generated IDs. Legacy maps may have no IDs at all.
+export function getMapChanges(previous, next) {
+    const changes = [];
+    const fieldsChanged = (before, after, keys) => keys
+        .filter(key => optionalText(before?.[key]) !== optionalText(after?.[key]))
+        .map(key => ({ key, before: optionalText(before?.[key]), after: optionalText(after?.[key]) }));
+    const sceneFields = fieldsChanged(previous, next, ['schematic_name', 'atmosphere']);
+    if (previous && sceneFields.length) changes.push({ type: 'scene', action: 'changed', name: next.schematic_name, fields: sceneFields });
+    const oldZones = new Map((previous?.zones || []).map(zone => [zone.position, zone]));
+    const newZones = new Map((next?.zones || []).map(zone => [zone.position, zone]));
+    for (const position of new Set([...oldZones.keys(), ...newZones.keys()])) {
+        const before = oldZones.get(position);
+        const after = newZones.get(position);
+        if (!before || !after) {
+            changes.push({ type: 'zone', action: before ? 'removed' : 'added', name: (after || before).name, position, fields: [] });
+            continue;
+        }
+        const fields = fieldsChanged({ ...before, threat_level: before.threat_level || 'safe' },
+            { ...after, threat_level: after.threat_level || 'safe' }, ['name', 'summary', 'threat_level', 'threat_reason']);
+        if (fields.length) changes.push({ type: 'zone', action: 'changed', name: after.name, position, fields });
+    }
+    const entries = (raw, type) => {
+        const groups = new Map();
+        for (const zone of raw?.zones || []) {
+            for (const value of zone[type === 'character' ? 'characters' : 'poi'] || []) {
+                const name = poiName(value);
+                if (!name) continue;
+                const key = entityKey(type, name);
+                const entry = { name, description: optionalText(value?.description), position: zone.position };
+                if (type === 'character') {
+                    for (const field of ['mood', 'attitude', 'thought']) entry[field] = optionalText(value?.[field]);
+                }
+                groups.set(key, [...(groups.get(key) || []), entry]);
+            }
+        }
+        return groups;
+    };
+    for (const type of ['character', 'object']) {
+        const beforeGroups = entries(previous, type);
+        const afterGroups = entries(next, type);
+        for (const key of new Set([...beforeGroups.keys(), ...afterGroups.keys()])) {
+            const before = beforeGroups.get(key) || [];
+            const after = afterGroups.get(key) || [];
+            const name = (after[0] || before[0]).name;
+            if (before.length <= 1 && after.length <= 1) {
+                const keys = type === 'character' ? ['description', 'mood', 'attitude', 'thought'] : ['description'];
+                if (before.length && after.length) keys.unshift('name');
+                const fields = fieldsChanged(before[0], after[0], keys);
+                const action = !before.length ? 'added' : !after.length ? 'removed'
+                    : before[0].position !== after[0].position ? 'moved' : 'changed';
+                if (action !== 'changed' || fields.length) changes.push({
+                    type, action, name, from: before[0]?.position, to: after[0]?.position, fields,
+                });
+                continue;
+            }
+            const signature = group => group.map(entry => JSON.stringify(entry)).sort().join('\n');
+            if (signature(before) !== signature(after)) changes.push({
+                type, action: !before.length ? 'added' : !after.length ? 'removed' : 'changed',
+                name, ambiguous: !!(before.length && after.length), fields: [],
+                from: before.map(entry => entry.position), to: after.map(entry => entry.position),
+            });
+        }
+    }
+    return changes;
+}
+
 export function restorePreviousMap(current) {
     if (!current?.raw || !current.previous?.raw) return null;
     return {

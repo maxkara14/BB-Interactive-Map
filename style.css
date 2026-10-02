@@ -23,6 +23,7 @@
     border-radius: 16px; padding: 25px; width: 650px; max-width: 95vw;
     box-shadow: 0 30px 60px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(255,255,255,0.05);
     display: flex; flex-direction: column; gap: 15px; max-height: 95vh;
+    overflow-y: auto; box-sizing: border-box;
     animation: bootUpModal 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
@@ -33,6 +34,7 @@
 }
 
 .bb-map-title {
+    max-width: 100%; overflow-wrap: anywhere; text-align: center;
     color: #ffffff; font-size: 18px; font-weight: bold;
     letter-spacing: 2px; text-transform: uppercase;
     text-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
@@ -53,7 +55,7 @@
 /* === СЕТКА === */
 .bb-schematic-grid {
     display: grid; grid-template-areas: "nw n ne" "w c e" "sw s se";
-    grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 1fr 1fr 1fr;
     gap: 12px; padding: 15px;
     background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
     background-size: 15px 15px; border-radius: 12px; min-height: 350px;
@@ -203,6 +205,7 @@
     .bb-map-close { padding: 10px; font-size: 12px; }
 }
 /* === ПАНЕЛЬ УПРАВЛЕНИЯ ПАМЯТЬЮ === */
+.bb-map-modal > * { flex-shrink: 0; min-width: 0; }
 .bb-map-controls {
     display: flex; gap: 10px; margin-top: 5px; justify-content: space-between;
 }
@@ -333,4 +336,45 @@
 }
 @media (prefers-reduced-motion: reduce) {
     .bb-map-widget { animation: none; }
+}
+
+/* Review and editing share the map's compact terminal surface. */
+.bb-map-review, .bb-map-edit-zone { border: 1px solid rgba(91,192,190,0.3); border-radius: 8px; background: rgba(0,0,0,0.18); color: #cbd5e1; }
+.bb-map-review > summary, .bb-map-edit-zone > summary { padding: 11px 12px; cursor: pointer; color: #e2e8f0; font-weight: 600; overflow-wrap: anywhere; }
+.bb-map-review > summary > span { margin-left: 8px; padding: 2px 6px; border-radius: 4px; background: rgba(91,192,190,0.18); color: #5bc0be; font-size: 11px; }
+.bb-map-review > p, .bb-map-editor .bb-map-header-container p { margin: 0 12px 12px; color: #94a3b8; font-size: 12px; line-height: 1.5; }
+.bb-map-review ul { margin: 0; padding: 0 12px 12px; list-style: none; max-height: 290px; overflow-y: auto; }
+.bb-map-change { padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.1); font-size: 12px; overflow-wrap: anywhere; }
+.bb-map-change-action { color: #5bc0be; margin-right: 5px; }
+.bb-map-change-removed .bb-map-change-action, .bb-map-change-warning { color: #fbbf24; }
+.bb-map-change-field { margin-top: 8px; }
+.bb-map-change small, .bb-map-edit-zone small { color: #94a3b8; }
+.bb-map-change-values { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 9px; margin-top: 4px; line-height: 1.5; }
+.bb-map-change-values > span:first-child { color: #94a3b8; }
+.bb-map-change-values > b { color: #5bc0be; }
+.bb-map-change-warning { margin-bottom: 0; }
+.bb-map-edit-fields, .bb-map-edit-zone-body { display: grid; gap: 10px; }
+.bb-map-edit-zones { display: grid; gap: 8px; }
+.bb-map-edit-zone-body { padding: 0 12px 12px; }
+.bb-map-edit-zone small { margin-left: 8px; font-weight: 400; }
+.bb-map-editor label { display: grid; gap: 5px; min-width: 0; font-size: 12px; color: #94a3b8; }
+.bb-map-editor input, .bb-map-editor textarea, .bb-map-editor select {
+    width: 100%; min-width: 0; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 5px; padding: 8px; font: inherit; color: #e2e8f0; background: #171d23;
+}
+.bb-map-editor textarea { resize: vertical; }
+.bb-map-edit-entities { display: grid; gap: 10px; }
+.bb-map-edit-entities fieldset { display: grid; gap: 9px; min-width: 0; margin: 0; border: 1px solid rgba(255,255,255,0.12); border-radius: 7px; padding: 10px; }
+.bb-map-edit-entities legend { color: #5bc0be; font-size: 12px; padding: 0 5px; }
+.bb-map-edit-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.bb-map-edit-remove { justify-self: start; color: #fbbf24; background: transparent; border: 0; cursor: pointer; padding: 4px 0; font: inherit; font-size: 12px; }
+.bb-map-edit-error { color: #f87171; margin: 0; font-size: 13px; }
+.bb-map-modal :focus-visible { outline: 2px solid #5bc0be; outline-offset: 2px; }
+.bb-map-modal .bb-map-controls { flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) {
+    .bb-map-modal { animation: none; }
+}
+@media (max-width: 600px) {
+    .bb-map-modal .bb-map-controls { flex-direction: column; }
+    .bb-map-change-values { grid-template-columns: minmax(0,1fr); gap: 2px; }
 }
