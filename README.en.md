@@ -15,6 +15,7 @@ A scene map and spatial memory extension for SillyTavern. It scans recent chat m
 - A saved map appears in a collapsible chat widget. Drag its header or focus it and use arrow keys to move it; position and collapsed state are saved in settings.
 - The chat widget shows a mini map and opens the full map. Scan and manage memory in the **Current chat map** section of extension settings.
 - Optionally, the map prepares an update after a character reply, including rerolls. Each update uses one model request. By default, proposals wait for review; a separate setting saves them automatically without confirmation and keeps the previous map for rollback.
+- Enable **Highlight map mentions in chat** under **Interface** (off by default) to click full character, object, and zone names for a card with their description and location from the saved map. Highlighting runs locally without model requests or message writes; repeated names, code, links, and inputs are skipped. Inflections, abbreviations, and names split by HTML markup are not matched yet.
 - Optional `{{bb_map}}` macro for manual prompt placement.
 - Interface language: browser language, Russian, or English. Prompts remain in English; map descriptions follow the chat language.
 - Scan source: current SillyTavern connection, a Connection Manager profile, or a direct OpenAI-compatible Custom API.

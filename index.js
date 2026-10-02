@@ -3,6 +3,7 @@
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges } from './map-state.js';
+import { createChatMapLinks } from './map-links.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
@@ -27,6 +28,7 @@ settings.showWidget ??= true;
 settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
 settings.autoApply ??= false;
+settings.highlightMentions ??= false;
 if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
@@ -39,6 +41,7 @@ let autoCandidate = null;
 let autoCandidateChat = null;
 let autoCandidateBase = null;
 let autoStatus = 'idle';
+let chatMapLinks = null;
 
 function currentLanguage() {
     if (settings.uiLanguage === 'ru' || settings.uiLanguage === 'en') return settings.uiLanguage;
@@ -908,8 +911,15 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         renderMapWidget();
     });
+    checkbox(general, tr('Подсвечивать упоминания карты в чате', 'Highlight map mentions in chat'), settings.highlightMentions, checked => {
+        settings.highlightMentions = checked;
+        saveSettingsDebounced();
+        chatMapLinks?.refresh();
+    });
+    note(general, tr('Нажмите на подсвеченное имя, предмет или зону для описания. Поиск использует полные названия сохранённой карты; повторяющиеся имена пропускаются.',
+        'Click a highlighted name, object, or zone for its description. Matches use full names from the saved map; repeated names are skipped.'));
 
-    // Keep map management in settings; the saved-map widget is the only chat control.
+    // Map management stays in extension settings.
     const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');
     const chatForTools = SillyTavern.getContext();
     const savedMap = getMapDataForCurrentChat();
@@ -1109,6 +1119,7 @@ function setupExtensionSettings(rebuild = false) {
 }
 
 function renderMapWidget() {
+    chatMapLinks?.refresh();
     document.getElementById('bb-map-widget')?.remove();
     const mapData = getMapDataForCurrentChat();
     if (!settings.showWidget || !Array.isArray(mapData?.raw?.zones)) return;
@@ -1233,6 +1244,27 @@ function renderMapWidget() {
 jQuery(async () => {
     try {
         const { eventSource, event_types } = SillyTavern.getContext();
+        chatMapLinks = createChatMapLinks({
+            getMap: () => getMapDataForCurrentChat()?.raw,
+            isEnabled: () => settings.highlightMentions,
+            getLabels: () => ({
+                language: currentLanguage(),
+                types: { zone: tr('Зона', 'Zone'), character: tr('Персонаж', 'Character'), object: tr('Предмет', 'Object') },
+                close: tr('Закрыть карточку', 'Close card'), openMap: tr('Открыть карту ↗', 'Open map ↗'),
+                noDescription: tr('Описание на карте отсутствует.', 'No description on the map.'),
+                source: tr('По сохранённой карте', 'From the saved map'),
+                mood: tr('Состояние', 'Mood'), attitude: tr('Отношение', 'Attitude'), reason: tr('Обстановка', 'Conditions'),
+                position: mapPositionLabel, threat: mapThreatLabel,
+            }),
+            onOpenMap: () => {
+                const current = getMapDataForCurrentChat();
+                if (current?.raw) showRadarModal(current.raw, true);
+            },
+        });
+        for (const type of [event_types.CHAT_LOADED, event_types.MORE_MESSAGES_LOADED, event_types.USER_MESSAGE_RENDERED,
+            event_types.CHARACTER_MESSAGE_RENDERED, event_types.MESSAGE_UPDATED, event_types.MESSAGE_SWIPED]) {
+            eventSource.on(type, () => chatMapLinks.refresh());
+        }
         
         // РЕГИСТРАЦИЯ МАКРОСА В TAVERN API
         const context = SillyTavern.getContext();
