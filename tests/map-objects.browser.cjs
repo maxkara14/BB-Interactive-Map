@@ -55,16 +55,10 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         assert.equal(await page.evaluate(() => writes), 1);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.previous.raw === original), true);
 
-        // An absent object is retained outside the grid and requires review once.
+        // Omission preserves established player possession without inventing loss.
         await page.evaluate(() => { response.zones[0].poi = []; queueAutoScan(context); });
-        await page.waitForFunction(() => autoStatus === 'ready');
-        assert.equal(await page.evaluate(() => writes), 1);
-        assert.equal(await page.evaluate(() => autoCandidate.unlocated_objects[0].last_known), 'Player');
-        await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
-        await page.locator('#bb-map-save-btn').click();
-        await page.evaluate(() => queueAutoScan(context));
         await page.waitForFunction(() => autoStatus === 'updated');
-        assert.equal(await page.evaluate(() => writes), 3);
+        assert.equal(await page.evaluate(() => writes), 2);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.unlocated_objects.length), 1);
         await page.evaluate(() => {
             document.getElementById('bb-map-overlay')?.remove();
@@ -75,11 +69,20 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             links.refresh();
         });
         await page.locator('[data-bb-map-mention="боккэн"]').click();
-        assert.match(await page.locator('#bb-map-mention-card').innerText(), /Местоположение неизвестно · ранее: Player/);
+        assert.match(await page.locator('#bb-map-mention-card').innerText(), /У персонажа · Player/);
         await page.evaluate(() => links.destroy());
 
+        // Explicit uncertainty is reviewed; it is excluded from active prompts.
+        await page.evaluate(() => {
+            response.unlocated_objects = [{ name: 'Боккэн', item_state: 'unknown', state_reason: 'Неясно, сохранился ли меч после падения.', uncertain: true }];
+            queueAutoScan(context);
+        });
+        await page.waitForFunction(() => autoStatus === 'ready');
+        assert.equal(await page.evaluate(() => writes), 2);
+        assert.equal(await page.evaluate(() => autoCandidate.unlocated_objects[0].last_known), 'Player');
+        await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
+
         // Unknown memory can be manually placed into an existing zone, then confirmed.
-        await page.evaluate(() => showRadarModal(chat_metadata.bb_map_data.raw, true));
         await page.locator('#bb-map-edit-btn').click();
         await object.locator('[name="destination"]').selectOption('0');
         await object.locator('[name="item_state"]').selectOption('zone');
@@ -91,17 +94,18 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
 
         // Explicit transfer autosaves; stale chat results never write.
         await page.evaluate(() => {
+            response.unlocated_objects = [];
             response.zones[0].poi = [{ name: 'Боккэн', item_state: 'held', holder: 'Мира', state_reason: 'Мира взяла меч.', uncertain: false }];
             queueAutoScan(context);
         });
         await page.waitForFunction(() => autoStatus === 'updated' && chat_metadata.bb_map_data.raw.zones[0].poi[0].item_state === 'held');
-        assert.equal(await page.evaluate(() => writes), 5);
+        assert.equal(await page.evaluate(() => writes), 4);
         await page.evaluate(async () => {
             generateQuietPrompt = async () => { context = { ...context, chatId: 'other' }; return JSON.stringify(response); };
             const result = await createMapCandidate(context, 'local');
             if (result !== null) throw Error('Stale candidate escaped');
         });
-        assert.equal(await page.evaluate(() => writes), 5);
+        assert.equal(await page.evaluate(() => writes), 4);
 
         // Classic retains possession data while hiding the game panel; EN labels render.
         await page.evaluate(() => { context = { ...context, chatId: 'one' }; chat_metadata.bb_map_mode = 'classic'; showRadarModal(chat_metadata.bb_map_data.raw, true); });
@@ -109,6 +113,46 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         await page.evaluate(() => { chat_metadata.bb_map_mode = 'game'; settings.uiLanguage = 'en'; showRadarModal(chat_metadata.bb_map_data.raw, true); });
         await page.locator('.bb-map-objects > summary').click();
         assert.match(await page.locator('.bb-map-objects').innerText(), /Held by a character · Мира/);
+        await page.locator('#bb-map-edit-btn').click();
+        await object.locator('[name="destination"]').selectOption('');
+        await object.locator('[name="item_state"]').selectOption('left');
+        await object.locator('[name="state_reason"]').fill('Меч оставлен в предыдущем зале.');
+        await page.getByRole('button', { name: 'PREVIEW EDITS', exact: true }).click();
+        assert.match(await page.locator('.bb-map-review').last().innerText(), /Left outside the scene/);
+        assert.equal(await page.evaluate(() => writes), 4);
+
+        // Legacy cleanup pauses auto-apply, filters old prompt memory and preserves rollback.
+        await page.evaluate(() => {
+            chat_metadata.bb_map_data = { raw: normalizeMapData({ schematic_name: 'Зал', zones: [{ position: 'center', name: 'Стойка',
+                poi: [{ name: 'Боккэн', item_state: 'held', holder: 'Player', state_reason: 'Игрок держит меч.' }] }],
+                unlocated_objects: [{ name: 'Старые половицы', item_state: 'unknown', last_known: 'Старый зал' }] }), context: 'Старые половицы are stale' };
+            globalThis.legacy = chat_metadata.bb_map_data;
+            if (getMapContextForCurrentChat().includes('Старые половицы')) throw Error('Legacy context leaked');
+            response = { schematic_name: 'Сад', zones: [{ position: 'center', name: 'Дорожка', poi: [{ name: 'Гравий', item_state: 'zone' }] }] };
+            generateQuietPrompt = async params => { requestedPrompt = params.quietPrompt; return JSON.stringify(response); };
+            queueAutoScan(context);
+        });
+        await page.waitForFunction(() => autoStatus === 'ready');
+        assert.equal(await page.evaluate(() => writes), 4);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data === legacy), true);
+        assert.doesNotMatch(await page.evaluate(() => requestedPrompt), /Старые половицы/);
+        assert.equal(await page.evaluate(() => autoCandidate.unlocated_objects[0].holder), 'Player');
+        await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
+        assert.match(await page.locator('.bb-map-review').last().innerText(), /Legacy memory cleanup/);
+        await page.locator('#bb-map-save-btn').click();
+        assert.equal(await page.evaluate(() => writes), 5);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.previous.raw === legacy.raw), true);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.unlocated_objects.length), 1);
+        await page.evaluate(() => {
+            response.unlocated_objects = [{ name: 'Боккэн', item_state: 'left', state_reason: 'Игрок оставил меч в старом зале.', uncertain: false }];
+            queueAutoScan(context);
+        });
+        await page.waitForFunction(() => autoStatus === 'updated');
+        assert.equal(await page.evaluate(() => writes), 6);
+        assert.doesNotMatch(await page.evaluate(() => getMapContextForCurrentChat()), /Боккэн/);
+        await page.evaluate(() => showRadarModal(chat_metadata.bb_map_data.raw, true));
+        await page.locator('.bb-map-objects > summary').click();
+        assert.doesNotMatch(await page.locator('.bb-map-objects').innerText(), /Боккэн|Старые половицы/);
         assert.equal(await page.evaluate(() => messages[0].mes), 'Мира берёт меч.');
         assert.deepEqual(errors, []);
         console.log('Object scan, review gate, manual corrections, save/rollback snapshot, memory, auto-apply, stale chat, modes and RU/EN passed.');

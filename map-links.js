@@ -37,6 +37,7 @@ export function createMapMentionIndex(raw) {
         }
     }
     for (const item of raw?.unlocated_objects || []) {
+        if (item.item_state !== 'held') continue;
         add({ ...item, type: 'object', zone: '', position: '' });
     }
     const entries = new Map([...groups].filter(([, values]) => values.length === 1).map(([key, values]) => [key, values[0]]));

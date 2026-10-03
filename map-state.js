@@ -49,10 +49,11 @@ function entityKey(type, name) {
 
 function objectState(source) {
     if (source?.item_state === undefined) return {};
-    if (!['zone', 'held', 'unknown'].includes(source.item_state)
+    if (!['zone', 'held', 'unknown', 'left'].includes(source.item_state)
         || (source.uncertain !== undefined && typeof source.uncertain !== 'boolean')) throw new Error('invalid_map');
     const holder = optionalText(source.holder);
     if (source.item_state === 'held' && !holder) throw new Error('invalid_map');
+    if (source.item_state === 'left' && !optionalText(source.state_reason)) throw new Error('invalid_map');
     return { item_state: source.item_state, holder: source.item_state === 'held' ? holder : '',
         state_reason: optionalText(source.state_reason), uncertain: source.uncertain === true,
         last_known: optionalText(source.last_known) };
@@ -64,10 +65,16 @@ export function getMapObjects(raw) {
     }))), ...(raw?.unlocated_objects || []).map(value => ({ ...value, zone: '', position: '' }))];
 }
 
-// Missing from a scan means unknown whereabouts, never destruction or a dropped item.
-export function reconcileMapObjects(next, previous = null) {
+const holderKey = name => optionalText(name).normalize('NFKC').toLowerCase();
+
+// Zone objects belong to this scene. Only established possession follows an actor.
+export function reconcileMapObjects(next, previous = null, playerName = '') {
     const previousItems = getMapObjects(previous);
     const previousById = new Map(previousItems.filter(item => item.id).map(item => [item.id, item]));
+    const player = holderKey(playerName);
+    const presentHolders = new Set(next.zones.flatMap(zone => (zone.characters || []).map(char => holderKey(char.name))));
+    if (player) presentHolders.add(player);
+    const previousHolders = new Set(previousItems.filter(item => item.item_state === 'held').map(item => holderKey(item.holder)));
     const lastKnown = item => item?.item_state === 'held' ? item.holder : item?.last_known || item?.zone || '';
     const withState = item => {
         const old = previousById.get(item.id);
@@ -75,27 +82,45 @@ export function reconcileMapObjects(next, previous = null) {
         if (state.item_state === 'unknown' && !state.last_known) state.last_known = lastKnown(old);
         return { ...item, ...state };
     };
-    const unlocated = (next.unlocated_objects || []).map(withState);
-    const currentNames = new Set(getMapObjects(next).map(item => entityKey('object', item.name)));
+    const unlocated = (next.unlocated_objects || []).map(withState).filter(item => {
+        const old = previousById.get(item.id);
+        return item.item_state === 'held' ? presentHolders.has(holderKey(item.holder))
+            : item.item_state === 'left' ? !!item.state_reason
+                : old?.item_state === 'held' && presentHolders.has(holderKey(old.holder));
+    });
+    const zones = next.zones.map(zone => ({ ...zone, poi: zone.poi.map(withState).filter(item =>
+        item.item_state !== 'held' || presentHolders.has(holderKey(item.holder)) || !previousHolders.has(holderKey(item.holder))) }));
+    const currentNames = new Set([...zones.flatMap(zone => zone.poi), ...unlocated].map(item => entityKey('object', item.name)));
     for (const item of previousItems) {
         if (currentNames.has(entityKey('object', item.name))) continue;
+        if (item.item_state !== 'held' || !presentHolders.has(holderKey(item.holder))) continue;
         unlocated.push({ id: item.id, name: item.name, description: optionalText(item.description),
-            item_state: 'unknown', holder: '', uncertain: true,
-            state_reason: '',
-            last_known: lastKnown(item) });
+            ...objectState(item) });
     }
-    return { ...next, zones: next.zones.map(zone => ({ ...zone, poi: zone.poi.map(withState) })), unlocated_objects: unlocated };
+    return { ...next, zones, unlocated_objects: unlocated,
+        object_memory_scope: 'scene' };
+}
+
+export function hasLegacyObjectMemory(raw) {
+    return raw?.object_memory_scope !== 'scene' && !!raw?.unlocated_objects?.some(item => item.item_state === 'unknown');
+}
+
+export function activeMapObjects(raw) {
+    return { ...raw, unlocated_objects: (raw?.unlocated_objects || []).filter(item => item.item_state === 'held') };
 }
 
 export function requiresObjectReview(previous, next, playerName = '') {
+    if (hasLegacyObjectMemory(previous)) return true;
     const changed = getMapChanges(previous, next).filter(change => change.type === 'object');
     const objects = getMapObjects(next);
     const holders = new Set([playerName, ...(previous?.zones || []).flatMap(zone => (zone.characters || []).map(char => char.name)),
-        ...(next?.zones || []).flatMap(zone => (zone.characters || []).map(char => char.name))].filter(Boolean));
+        ...(next?.zones || []).flatMap(zone => (zone.characters || []).map(char => char.name))].filter(Boolean).map(holderKey));
     return changed.some(change => change.ambiguous || objects.some(item => item.name === change.name
-        && (item.uncertain || (item.item_state === 'held' && !holders.has(item.holder))
+        && (item.uncertain || item.item_state === 'unknown' || (item.item_state === 'held' && !holders.has(holderKey(item.holder)))
             || (item.item_state && !item.state_reason
-                && (change.action === 'moved' || change.fields.some(field => ['item_state', 'holder'].includes(field.key)))))));
+                && (change.action === 'moved' || change.fields.some(field => ['item_state', 'holder'].includes(field.key))))))
+        || (change.action === 'removed' && playerName && getMapObjects(previous).some(item => item.name === change.name
+            && item.item_state === 'held' && holderKey(item.holder) === holderKey(playerName))));
 }
 
 function previousEntityIds(previousRaw) {
@@ -168,6 +193,7 @@ export function normalizeMapData(input, previousRaw = null) {
     if (!zonesByPosition.size) throw new Error('invalid_map');
 
     const zones = [...zonesByPosition.values()];
+    if (zones.some(zone => zone.poi.some(item => item.item_state === 'left'))) throw new Error('invalid_map');
     if (input.unlocated_objects !== undefined && !Array.isArray(input.unlocated_objects)) throw new Error('invalid_map');
     const unlocated = (input.unlocated_objects || []).map(item => {
         const state = objectState(item);
@@ -202,6 +228,7 @@ export function normalizeMapData(input, previousRaw = null) {
         atmosphere: optionalText(input.atmosphere),
         zones,
         ...(input.unlocated_objects !== undefined ? { unlocated_objects: unlocated } : {}),
+        ...(input.object_memory_scope === 'scene' ? { object_memory_scope: 'scene' } : {}),
     };
 }
 
@@ -222,8 +249,9 @@ export function buildMapContextString(mapData) {
             context += `Zone "${zone.name}" (${zone.position})${threat}: ${zone.summary || ''}${characters}${objects} `;
         }
     }
-    if (mapData.unlocated_objects?.length) context += `Remembered objects outside the current grid: ${mapData.unlocated_objects.map(item =>
-        `${item.name} (${item.item_state === 'held' ? `held by ${item.holder}` : `whereabouts unknown${item.last_known ? `; last known: ${item.last_known}` : ''}`})`).join(', ')}. `;
+    const carried = (mapData.unlocated_objects || []).filter(item => item.item_state === 'held');
+    if (carried.length) context += `Carried objects outside the current grid: ${carried.map(item =>
+        `${item.name} (held by ${item.holder})`).join(', ')}. `;
     return `${context}]`;
 }
 

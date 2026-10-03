@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
@@ -222,7 +222,9 @@ function getMapDataForCurrentChat() {
 }
 
 function getMapContextForCurrentChat() {
-    const memory = getMapDataForCurrentChat()?.context || '';
+    const saved = getMapDataForCurrentChat();
+    const memory = saved?.raw?.unlocated_objects?.some(item => item.item_state !== 'held')
+        ? buildMapContextString(activeMapObjects(saved.raw)) : saved?.context || '';
     if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
     return `${memory}\n[Game map: The center zone is the player's last known position. Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
 }
@@ -269,6 +271,7 @@ function mapThreatLabel(value) {
 }
 
 function mapItemStateLabel(value) {
+    if (value === 'left') return tr('Оставлен вне сцены', 'Left outside the scene');
     return value === 'held' ? tr('У персонажа', 'Held by a character')
         : value === 'unknown' ? tr('Местоположение неизвестно', 'Whereabouts unknown') : tr('В зоне', 'In the zone');
 }
@@ -277,10 +280,10 @@ function mapObjectLabel(item) {
     return `${mapItemStateLabel(item.item_state || 'zone')}${item.holder ? ` · ${item.holder}` : ''}${item.last_known ? ` · ${tr('ранее:', 'last known:')} ${item.last_known}` : ''}`;
 }
 
-function mapObjectsHtml(data) {
-    const objects = getMapObjects(data);
+function mapObjectsHtml(data, isSavedMap) {
+    const objects = getMapObjects(isSavedMap ? activeMapObjects(data) : data);
     return `<details class="bb-map-review bb-map-objects"><summary>${tr('Предметы сцены', 'Scene objects')} <span>${objects.length}</span></summary>
-        <p>${tr('Положение подтверждается событиями истории. Правки доступны через «Править карту».', 'Whereabouts follow narrative events. Use Edit map to correct them.')}</p>
+        <p>${tr('Окружение относится к текущей сцене. Между сценами сохраняются вещи игрока и персонажей, которые сейчас присутствуют. Правки — через «Править карту».', 'Surroundings belong to the current scene. Carry items with the player and characters currently present. Use Edit map to correct them.')}</p>
         <ul>${objects.map(item => `<li class="bb-map-change"><strong>${escapeHtml(item.name)}</strong><div>${escapeHtml(mapObjectLabel(item))}${item.item_state !== 'unknown' && item.zone ? ` · ${escapeHtml(item.zone)}` : ''}</div>
         ${item.state_reason ? `<small>${escapeHtml(item.state_reason)}</small>` : ''}</li>`).join('')}</ul></details>`;
 }
@@ -308,6 +311,7 @@ function mapChangesHtml(previous, next) {
             ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.before) : field.key === 'item_state' ? mapItemStateLabel(field.before) : field.before || '—')}</span><b>→</b><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.after) : field.key === 'item_state' ? mapItemStateLabel(field.after) : field.after || '—')}</span></div></div>`).join('')}
         </li>`).join('')}</ul>` : `<p>${tr('Изменений нет.', 'No changes.')}</p>`}
         ${getMapMode(chat_metadata) === 'game' && requiresObjectReview(previous, next, SillyTavern.getContext().name1) ? `<p class="bb-map-change-warning">${tr('Положение некоторых предметов неоднозначно. Проверьте изменения перед сохранением; автосохранение приостановлено.', 'Some object whereabouts are uncertain. Review before saving; automatic saving is paused.')}</p>` : ''}
+        ${hasLegacyObjectMemory(previous) ? `<p class="bb-map-change-warning">${tr('Очистка старой памяти: неактуальные объекты перестанут отслеживаться. Предыдущая карта останется доступна для отката.', 'Legacy memory cleanup: outdated objects will stop being tracked. The previous map remains available for rollback.')}</p>` : ''}
     </details>`;
 }
 
@@ -428,7 +432,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
             </div>
 
             ${gameMode ? `<section id="bb-map-travel" class="bb-map-travel" aria-live="polite"><p>${tr('Выберите соседнюю зону для перехода.', 'Select a neighboring zone to travel.')}</p></section>` : ''}
-            ${getMapMode(chat_metadata) === 'game' ? mapObjectsHtml(data) : ''}
+            ${getMapMode(chat_metadata) === 'game' ? mapObjectsHtml(data, isSavedMap) : ''}
             ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
 
             <div class="bb-map-controls">
@@ -545,7 +549,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                     && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && overlay.isConnected;
                 try {
                     const result = await api.generatePlayerAction({ kind: 'map_travel', from, to,
-                        mapContext: expectedMap.context || '', instruction: instruction.value, isCurrent, signal: controller.signal });
+                        mapContext: getMapContextForCurrentChat(), instruction: instruction.value, isCurrent, signal: controller.signal });
                     if (result?.status === 'applied') overlay.remove();
                 } catch (error) {
                     const messages = {
@@ -675,7 +679,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         field(block, 'destination', String(zoneIndex), type === 'object' && (editObjects || zoneIndex === '')
             ? [...destinations, ['', tr('Вне текущей сетки', 'Outside the current grid')]] : destinations, false, tr('Зона', 'Zone'));
         if (type === 'object' && editObjects) {
-            field(block, 'item_state', entry?.item_state || (zoneIndex === '' ? 'unknown' : 'zone'), ['zone', 'held', 'unknown'].map(value => [value, mapItemStateLabel(value)]));
+            field(block, 'item_state', entry?.item_state || (zoneIndex === '' ? 'unknown' : 'zone'), ['zone', 'held', 'unknown', 'left'].map(value => [value, mapItemStateLabel(value)]));
             field(block, 'holder', entry?.holder);
             field(block, 'state_reason', entry?.state_reason);
         }
@@ -743,7 +747,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             }
             const readFields = target => Object.fromEntries([...target.querySelectorAll(':scope > label > input, :scope > label > textarea, :scope > label > select')]
                 .map(input => [input.name, input.value]));
-            const draft = { ...readFields(scene), zones: [...form.querySelectorAll('.bb-map-edit-zone')].map((section, index) => ({
+            const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: [...form.querySelectorAll('.bb-map-edit-zone')].map((section, index) => ({
                 ...readFields(section.querySelector('.bb-map-edit-zone-body')), position: data.zones[index].position, poi: [], characters: [],
             })) };
             for (const block of form.querySelectorAll('[data-entity-type]')) {
@@ -767,7 +771,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             const message = form.querySelector('.bb-map-edit-error');
             message.hidden = false;
             message.textContent = error.message === 'invalid_map'
-                ? tr('Проверьте названия. Для предмета у персонажа укажите владельца; вне сетки выберите «У персонажа» или «Местоположение неизвестно».', 'Check names. Held objects need a holder; outside the grid choose Held or Unknown whereabouts.') : error.message;
+                ? tr('Проверьте названия и положение. Для предмета у персонажа нужен владелец, для оставленного вне сцены — основание. Состояние «В зоне» требует выбора зоны.', 'Check names and whereabouts. Held objects need a holder; objects left outside the scene need evidence. In the zone requires a selected zone.') : error.message;
             message.scrollIntoView({ block: 'nearest' });
         }
     };
@@ -793,20 +797,23 @@ async function createMapCandidate(chatForScan, scaleMode) {
     }
     let prevMapInstruction = "";
     if (prevData && prevData.context) {
-        prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${prevData.context}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
+        const previousContext = prevData.raw ? buildMapContextString(activeMapObjects(prevData.raw)) : prevData.context;
+        prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${previousContext}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
     }
 
     const prompt = MAP_PROMPT
         .replace('{{lastMessages}}', recentMessages)
         .replace('{{scaleInstruction}}', scaleInstruction + (modeForScan === 'game'
-            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current grid may be listed in top-level unlocated_objects with the same fields and state held or unknown; never invent a zone to hold them.' : ''))
+            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current grid may be listed in top-level unlocated_objects with the same fields and state held, unknown, or left (with evidence); never invent a zone to hold them.' : ''))
         .replace('{{previousMap}}', prevMapInstruction);
-    const result = await generateMapFast(prompt);
+    const objectScopeRules = modeForScan === 'game'
+        ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current grid, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
+    const result = await generateMapFast(prompt + objectScopeRules);
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan) return null;
     const candidate = normalizeMapData(extractJSON(result), prevData?.raw);
     return modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
-        ? reconcileMapObjects(candidate, prevData?.raw) : candidate;
+        ? reconcileMapObjects(candidate, prevData?.raw, chatForScan.name1) : candidate;
 }
 
 async function triggerMapScan(btnElement, scaleMode = 'local') {
@@ -885,7 +892,8 @@ function queueAutoScan(chatForScan) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
                 return;
             }
-            if (settings.autoApply && !(getMapMode(chat_metadata) === 'game' && requiresObjectReview(baseMap.raw, candidate, chatForScan.name1))) {
+            if (settings.autoApply && !hasLegacyObjectMemory(baseMap.raw)
+                && !(getMapMode(chat_metadata) === 'game' && requiresObjectReview(baseMap.raw, candidate, chatForScan.name1))) {
                 chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
                 await saveChatConditional();
                 if (isSameChat(chatForScan, SillyTavern.getContext())) {
