@@ -29,6 +29,7 @@ settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
 settings.autoApply ??= false;
 settings.highlightMentions ??= false;
+if (!['simple', 'enhance'].includes(settings.travelWriting)) settings.travelWriting = 'simple';
 if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
@@ -42,6 +43,12 @@ let autoCandidateChat = null;
 let autoCandidateBase = null;
 let autoStatus = 'idle';
 let chatMapLinks = null;
+let mapTravelController = null;
+
+function getEnhanceActionAPI() {
+    const api = globalThis.BBEnhanceGen;
+    return api?.apiVersion === 1 && typeof api.generatePlayerAction === 'function' ? api : null;
+}
 
 function currentLanguage() {
     if (settings.uiLanguage === 'ru' || settings.uiLanguage === 'en') return settings.uiLanguage;
@@ -285,6 +292,7 @@ function mapChangesHtml(previous, next) {
 }
 
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
+    mapTravelController?.abort();
     const gameMode = isSavedMap && getMapMode(chat_metadata) === 'game';
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
@@ -431,6 +439,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         });
         el.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (mapTravelController) return;
             const info = telemetryData[el.getAttribute('data-id')];
             if (lockedNode === el) {
                 lockedNode.classList.remove('node-locked');
@@ -450,6 +459,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     });
 
     function showTravel(position) {
+        if (mapTravelController) return;
         const panel = overlay.querySelector('#bb-map-travel');
         const transition = getMapTransition(data, position);
         panel.className = 'bb-map-travel';
@@ -474,7 +484,26 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         prepare.type = 'button';
         prepare.className = 'bb-map-btn';
         prepare.textContent = tr('ПОДГОТОВИТЬ ПЕРЕХОД', 'PREPARE TRAVEL');
-        prepare.onclick = () => {
+        const literary = settings.travelWriting === 'enhance';
+        const instruction = document.createElement('input');
+        instruction.type = 'text'; instruction.className = 'text_pole'; instruction.maxLength = 1000;
+        instruction.placeholder = tr('Например: осторожно, не привлекая внимания', 'For example: cautiously, without drawing attention');
+        const instructionLabel = document.createElement('label');
+        instructionLabel.textContent = tr('Уточнение действия (необязательно)', 'Action detail (optional)');
+        instructionLabel.append(instruction);
+        const status = document.createElement('p'); status.setAttribute('role', 'status');
+        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'bb-map-btn'; cancel.hidden = true;
+        cancel.textContent = tr('ОТМЕНИТЬ ГЕНЕРАЦИЮ', 'CANCEL GENERATION');
+        if (literary) {
+            prepare.textContent = tr('НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', 'WRITE ACTION · ENHANCE');
+            source.textContent = tr('Запрос через подключение Enhance Gen. Результат добавится в черновик; отправка вручную.', 'A request through the Enhance Gen connection. The result is appended to your draft; sending is manual.');
+            if (!getEnhanceActionAPI()) {
+                prepare.disabled = true;
+                status.textContent = tr('Нужен запущенный Enhance Gen с поддержкой действий карты. Обновите оба расширения или выберите простой текст.', 'Requires a running Enhance Gen with map action support. Update both extensions or choose simple text.');
+            }
+        }
+        cancel.onclick = () => mapTravelController?.abort();
+        prepare.onclick = async () => {
             if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
                 || getMapMode(chat_metadata) !== 'game') {
                 toastr.warning(tr('Чат, режим или карта изменились. Откройте карту заново.', 'The chat, mode, or map changed. Reopen the map.'), 'BB Map');
@@ -483,6 +512,33 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
             const composer = document.getElementById('send_textarea');
             if (!composer || composer.disabled || composer.readOnly || document.body.dataset.generating) {
                 toastr.warning(tr('Поле ввода сейчас недоступно. Дождитесь завершения ответа.', 'The message input is unavailable. Wait for the reply to finish.'), 'BB Map');
+                return;
+            }
+            if (literary) {
+                const api = getEnhanceActionAPI();
+                if (!api || mapTravelController) return;
+                const controller = new AbortController(); mapTravelController = controller;
+                prepare.disabled = true; instruction.disabled = true; cancel.hidden = false;
+                status.textContent = tr('Enhance пишет действие…', 'Enhance is writing the action…');
+                const isCurrent = () => isSameChat(chatForMap, SillyTavern.getContext())
+                    && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && overlay.isConnected;
+                try {
+                    const result = await api.generatePlayerAction({ kind: 'map_travel', from, to,
+                        mapContext: expectedMap.context || '', instruction: instruction.value, isCurrent, signal: controller.signal });
+                    if (result?.status === 'applied') overlay.remove();
+                } catch (error) {
+                    const messages = {
+                        busy: tr('Enhance или таверна уже генерирует. Попробуйте позже.', 'Enhance or SillyTavern is already generating. Try again later.'),
+                        draft_changed: tr('Черновик изменился. Результат не применён.', 'The draft changed. The result was not applied.'),
+                        stale_chat: tr('Чат изменился. Результат не применён.', 'The chat changed. The result was not applied.'),
+                        stale_action: tr('Карта или режим изменились. Результат не применён.', 'The map or mode changed. The result was not applied.'),
+                    };
+                    status.textContent = error?.name === 'AbortError' ? tr('Отменено. Черновик сохранён.', 'Cancelled. Your draft is preserved.')
+                        : messages[error?.code] || tr('Enhance не смог подготовить действие. Проверьте его подключение и лимит ответа; черновик сохранён.', 'Enhance could not prepare the action. Check its connection and response limit; your draft is preserved.');
+                } finally {
+                    if (mapTravelController === controller) mapTravelController = null;
+                    prepare.disabled = false; instruction.disabled = false; cancel.hidden = true;
+                }
                 return;
             }
             const draft = createTravelDraft(composer.value, transition, currentLanguage());
@@ -496,7 +552,9 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
             composer.focus();
             composer.setSelectionRange(draft.length, draft.length);
         };
-        panel.append(route, note, source, prepare);
+        panel.append(route, note, source);
+        if (literary) panel.append(instructionLabel);
+        panel.append(prepare, cancel, status);
     }
 
     const saveBtn = document.getElementById('bb-map-save-btn');
@@ -539,12 +597,14 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     }
 
     document.getElementById('bb-map-back-btn').onclick = () => {
+        mapTravelController?.abort();
         overlay.style.opacity = '0';
         setTimeout(() => overlay.remove(), 300);
     };
 }
 
 function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
+    mapTravelController?.abort();
     document.getElementById('bb-map-overlay')?.remove();
     const overlay = document.createElement('div');
     overlay.id = 'bb-map-overlay';
@@ -1000,6 +1060,7 @@ function setupExtensionSettings(rebuild = false) {
                 return;
             }
             chat_metadata.bb_map_mode = value;
+            mapTravelController?.abort();
             saveChatDebounced();
             resetAutoUpdate();
             document.getElementById('bb-map-overlay')?.remove();
@@ -1008,6 +1069,14 @@ function setupExtensionSettings(rebuild = false) {
             setupExtensionSettings(true);
         });
     modeSelect.disabled = chatForTools.chatId == null || !chatForTools.chat?.length;
+    const writingSelect = select(mapTools, tr('Подготовка перехода', 'Travel writing'), settings.travelWriting,
+        [['simple', tr('Простой текст', 'Simple text')], ['enhance', tr('Через Enhance Gen', 'Through Enhance Gen')]], value => {
+            mapTravelController?.abort();
+            settings.travelWriting = value; saveSettingsDebounced();
+            document.getElementById('bb-map-overlay')?.remove();
+        });
+    writingSelect.querySelector('option[value="enhance"]').disabled = !getEnhanceActionAPI();
+    if (!getEnhanceActionAPI()) note(mapTools, tr('Генерация переходов доступна с Enhance Gen, поддерживающим API действий карты.', 'Generated travel requires Enhance Gen with the map action API.'));
     note(mapTools, tr('В игровом режиме выберите соседнюю зону на полной карте, чтобы подготовить действие перехода. Центральная зона — текущее положение по карте.',
         'In game mode, select a neighboring zone on the full map to prepare a travel action. The center zone is your current position on the map.'));
     note(mapTools, savedMap?.context
@@ -1369,6 +1438,7 @@ jQuery(async () => {
         });
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
+            mapTravelController?.abort();
             resetAutoUpdate();
             document.getElementById('bb-map-overlay')?.remove();
             injectCurrentMapContext();
@@ -1382,6 +1452,7 @@ jQuery(async () => {
         window.addEventListener('resize', () => {
             if (document.getElementById('bb-map-widget')) renderMapWidget();
         });
+        window.addEventListener('bb-enhance-gen:ready', () => setupExtensionSettings(true));
 
         // ЖЕЛЕЗОБЕТОННЫЙ ПЕРЕХВАТЧИК МАКРОСА
         eventSource.on(event_types.GENERATE_AFTER_DATA, (generate_data) => {

@@ -6,6 +6,13 @@
 }
 .bb-map-travel p { margin: 0; font-size: 13px; }
 .bb-map-travel small { color: #aebdcd; line-height: 1.5; }
+.bb-map-travel label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.bb-map-travel input {
+    box-sizing: border-box; min-width: 0; width: 100%; padding: 8px;
+    background: rgba(0, 0, 0, 0.3); color: #e2e8f0; border: 1px solid rgba(91, 192, 190, 0.3); border-radius: 6px;
+}
+.bb-map-travel input:disabled { opacity: 0.65; }
+.bb-map-travel [hidden] { display: none; }
 .bb-map-travel.is-tension { border-left-color: #fbbf24; }
 .bb-map-travel.is-danger { border-left-color: #f87171; background: rgba(248, 113, 113, 0.07); }
 .bb-zone[role="button"]:focus-visible { outline: 2px solid #5bc0be; outline-offset: 3px; }
