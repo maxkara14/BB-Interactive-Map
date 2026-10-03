@@ -317,7 +317,7 @@
 }
 .bb-map-widget-danger .bb-map-widget-signal { background: #ef4444; box-shadow: 0 0 9px rgba(239, 68, 68, 0.7); }
 .bb-map-widget-tension .bb-map-widget-signal { background: #f59e0b; box-shadow: 0 0 9px rgba(245, 158, 11, 0.7); }
-.bb-map-widget-heading { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.bb-map-widget-heading { flex: 1; min-width: 0; white-space: normal; overflow-wrap: anywhere; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
 .bb-map-widget-badge { color: #0f1419; background: #5bc0be; border-radius: 4px; padding: 2px 5px; font-size: 9px; font-weight: 700; }
 .bb-map-widget-toggle, .bb-map-widget-open, .bb-map-widget-review, .bb-map-widget-discard {
     color: #5bc0be; background: rgba(91, 192, 190, 0.08); border: 1px solid rgba(91, 192, 190, 0.28);
@@ -326,9 +326,9 @@
 .bb-map-widget-toggle { width: 30px; height: 28px; flex: 0 0 30px; font-size: 18px; line-height: 1; }
 .bb-map-widget-content { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 0 11px 11px; }
 .bb-map-widget-content[hidden] { display: none; }
-.bb-map-widget-meta { display: flex; min-width: 0; justify-content: space-between; gap: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 9px; color: #94a3b8; }
-.bb-map-widget-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bb-map-widget-threat { flex: 0 0 auto; color: #4ade80; }
+.bb-map-widget-meta { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 9px; color: #94a3b8; }
+.bb-map-widget-meta > span:first-child { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.bb-map-widget-threat { justify-self: end; color: #4ade80; font-size: 11px; }
 .bb-map-widget-danger .bb-map-widget-threat { color: #f87171; }
 .bb-map-widget-tension .bb-map-widget-threat { color: #fbbf24; }
 .bb-map-widget-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
