@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
@@ -214,12 +214,18 @@ function getMapDataForCurrentChat() {
     return chat_metadata['bb_map_data'] || null;
 }
 
+function getMapContextForCurrentChat() {
+    const memory = getMapDataForCurrentChat()?.context || '';
+    if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
+    return `${memory}\n[Game map: The center zone is the player's last known position. Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
+}
+
 // === ИЗМЕНЕНО: Логика инъекции теперь учитывает useMacro ===
 function injectCurrentMapContext() {
     try {
-        const mapData = getMapDataForCurrentChat();
-        if (mapData && mapData.context && !extension_settings[MODULE_NAME].useMacro) {
-            setExtensionPrompt('bb_map_injector', mapData.context, extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
+        const memory = getMapContextForCurrentChat();
+        if (memory && !extension_settings[MODULE_NAME].useMacro) {
+            setExtensionPrompt('bb_map_injector', memory, extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         } else {
             setExtensionPrompt('bb_map_injector', '', extension_prompt_types.IN_CHAT, 2, false, extension_prompt_roles.USER);
         }
@@ -279,6 +285,7 @@ function mapChangesHtml(previous, next) {
 }
 
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
+    const gameMode = isSavedMap && getMapMode(chat_metadata) === 'game';
     const old = document.getElementById('bb-map-overlay');
     if (old) old.remove();
 
@@ -360,7 +367,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         const dataIndex = telemetryData.push(zoneInfo) - 1;
         
         gridHtml += `
-            <div class="bb-zone zone-${zone.position} ${threatClass} interactable-node" data-id="${dataIndex}">
+            <div class="bb-zone zone-${zone.position} ${threatClass} interactable-node" data-id="${dataIndex}" data-position="${zone.position}" ${gameMode ? `role="button" tabindex="0" aria-label="${escapeHtml(zone.name)} · ${escapeHtml(mapPositionLabel(zone.position))}"` : ''}>
                 <div class="bb-zone-title">${safeZoneName}</div>
                 <div class="bb-zone-chars">${charsHtml}</div>
             </div>
@@ -392,6 +399,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 <span style="opacity:0.5;">${tr('[ОЖИДАНИЕ] Наведите курсор или нажмите для выбора...', '[READY] Hover or click to select...')}</span>
             </div>
 
+            ${gameMode ? `<section id="bb-map-travel" class="bb-map-travel" aria-live="polite"><p>${tr('Выберите соседнюю зону для перехода.', 'Select a neighboring zone to travel.')}</p></section>` : ''}
             ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
 
             <div class="bb-map-controls">
@@ -434,8 +442,62 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 lockedNode.classList.add('node-locked');
                 updateTelemetry(info, true);
             }
+            if (gameMode) showTravel(el === lockedNode ? el.dataset.position : null);
+        });
+        if (gameMode && el.dataset.position) el.addEventListener('keydown', e => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); el.click(); }
         });
     });
+
+    function showTravel(position) {
+        const panel = overlay.querySelector('#bb-map-travel');
+        const transition = getMapTransition(data, position);
+        panel.className = 'bb-map-travel';
+        panel.replaceChildren();
+        const note = document.createElement('p');
+        if (!transition) {
+            note.textContent = position === 'center'
+                ? tr('Вы уже в центральной зоне по сохранённой карте.', 'You are already in the center zone according to the saved map.')
+                : tr('Выберите соседнюю зону для перехода. Для переходов карта должна содержать центральную зону.', 'Select a neighboring zone to travel. Travel requires a center zone on the map.');
+            panel.append(note);
+            return;
+        }
+        const { from, to } = transition;
+        panel.classList.add(`is-${['safe', 'tension', 'danger'].includes(to.threat_level) ? to.threat_level : 'safe'}`);
+        const route = document.createElement('strong');
+        route.textContent = `${from.name} → ${to.name}`;
+        note.textContent = `${mapThreatLabel(to.threat_level || 'safe')} · ${to.threat_reason || tr('Обстановка не описана.', 'Conditions are not described.')}`;
+        const source = document.createElement('small');
+        source.textContent = tr('По сохранённой карте. Переход добавится в черновик; расположение обновится после событий сцены и сохранения карты.',
+            'From the saved map. Travel is added to your draft; the position updates after the scene and saving the map.');
+        const prepare = document.createElement('button');
+        prepare.type = 'button';
+        prepare.className = 'bb-map-btn';
+        prepare.textContent = tr('ПОДГОТОВИТЬ ПЕРЕХОД', 'PREPARE TRAVEL');
+        prepare.onclick = () => {
+            if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
+                || getMapMode(chat_metadata) !== 'game') {
+                toastr.warning(tr('Чат, режим или карта изменились. Откройте карту заново.', 'The chat, mode, or map changed. Reopen the map.'), 'BB Map');
+                return;
+            }
+            const composer = document.getElementById('send_textarea');
+            if (!composer || composer.disabled || composer.readOnly || document.body.dataset.generating) {
+                toastr.warning(tr('Поле ввода сейчас недоступно. Дождитесь завершения ответа.', 'The message input is unavailable. Wait for the reply to finish.'), 'BB Map');
+                return;
+            }
+            const draft = createTravelDraft(composer.value, transition, currentLanguage());
+            if (composer.maxLength >= 0 && draft.length > composer.maxLength) {
+                toastr.warning(tr('Действие не помещается в черновик.', 'The action exceeds the draft length limit.'), 'BB Map');
+                return;
+            }
+            composer.value = draft;
+            composer.dispatchEvent(new Event('input', { bubbles: true }));
+            overlay.remove();
+            composer.focus();
+            composer.setSelectionRange(draft.length, draft.length);
+        };
+        panel.append(route, note, source, prepare);
+    }
 
     const saveBtn = document.getElementById('bb-map-save-btn');
     overlay.querySelector('#bb-map-edit-btn').onclick = () => showMapEditor(data, isSavedMap, chatForMap, expectedMap);
@@ -620,6 +682,10 @@ async function createMapCandidate(chatForScan, scaleMode) {
     }
 
     const prevData = getMapDataForCurrentChat();
+    const modeForScan = getMapMode(chat_metadata);
+    if (modeForScan === 'game' && scaleMode === 'global') {
+        scaleInstruction = 'Map the nearby established rooms or outdoor areas of the building/district. Center is the player\'s current room. Include only adjacent zones supported by the scene; omit unknown surroundings.';
+    }
     let prevMapInstruction = "";
     if (prevData && prevData.context) {
         prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${prevData.context}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
@@ -627,10 +693,12 @@ async function createMapCandidate(chatForScan, scaleMode) {
 
     const prompt = MAP_PROMPT
         .replace('{{lastMessages}}', recentMessages)
-        .replace('{{scaleInstruction}}', scaleInstruction)
+        .replace('{{scaleInstruction}}', scaleInstruction + (modeForScan === 'game'
+            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale.' : ''))
         .replace('{{previousMap}}', prevMapInstruction);
     const result = await generateMapFast(prompt);
-    if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData) return null;
+    if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
+        || getMapMode(chat_metadata) !== modeForScan) return null;
     return normalizeMapData(extractJSON(result), prevData?.raw);
 }
 
@@ -704,7 +772,7 @@ function queueAutoScan(chatForScan) {
         renderMapWidget();
         try {
             const candidate = await createMapCandidate(chatForScan, settings.scanScale);
-            if (!candidate || !settings.autoUpdate || getMapDataForCurrentChat() !== baseMap
+            if (!candidate || generationStopped || !settings.autoUpdate || getMapDataForCurrentChat() !== baseMap
                 || chatForScan.chat?.at(-1) !== reply || reply?.mes !== replyText
                 || !isSameChat(chatForScan, SillyTavern.getContext())) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
@@ -923,6 +991,25 @@ function setupExtensionSettings(rebuild = false) {
     const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');
     const chatForTools = SillyTavern.getContext();
     const savedMap = getMapDataForCurrentChat();
+    const modeSelect = select(mapTools, tr('Режим текущего чата', 'Current chat mode'), getMapMode(chat_metadata),
+        [['classic', tr('Классический', 'Classic')], ['game', tr('Игровой', 'Game')]], value => {
+            if (!isSameChat(chatForTools, SillyTavern.getContext()) || !chatForTools.chat?.length
+                || document.body.dataset.generating || isChatSaving || scanInProgress) {
+                modeSelect.value = getMapMode(chat_metadata);
+                toastr.warning(tr('Дождитесь завершения ответа или сканирования в текущем чате.', 'Wait for the reply or scan to finish in the current chat.'), 'BB Map');
+                return;
+            }
+            chat_metadata.bb_map_mode = value;
+            saveChatDebounced();
+            resetAutoUpdate();
+            document.getElementById('bb-map-overlay')?.remove();
+            injectCurrentMapContext();
+            renderMapWidget();
+            setupExtensionSettings(true);
+        });
+    modeSelect.disabled = chatForTools.chatId == null || !chatForTools.chat?.length;
+    note(mapTools, tr('В игровом режиме выберите соседнюю зону на полной карте, чтобы подготовить действие перехода. Центральная зона — текущее положение по карте.',
+        'In game mode, select a neighboring zone on the full map to prepare a travel action. The center zone is your current position on the map.'));
     note(mapTools, savedMap?.context
         ? tr('Память локации активна.', 'Location memory is active.')
         : tr('Память локации пуста.', 'Location memory is empty.'));
@@ -1270,8 +1357,7 @@ jQuery(async () => {
         const context = SillyTavern.getContext();
         if (context.registerMacro) {
             context.registerMacro('bb_map', () => {
-                const mapData = getMapDataForCurrentChat();
-                return (extension_settings[MODULE_NAME].useMacro && mapData && mapData.context) ? mapData.context : '';
+                return extension_settings[MODULE_NAME].useMacro ? getMapContextForCurrentChat() : '';
             });
             console.log('[BB Map] Макрос {{bb_map}} зарегистрирован');
         }
@@ -1300,8 +1386,7 @@ jQuery(async () => {
         // ЖЕЛЕЗОБЕТОННЫЙ ПЕРЕХВАТЧИК МАКРОСА
         eventSource.on(event_types.GENERATE_AFTER_DATA, (generate_data) => {
             if (extension_settings[MODULE_NAME].useMacro && generate_data && Array.isArray(generate_data.messages)) {
-                const mapData = getMapDataForCurrentChat();
-                const promptText = (mapData && mapData.context) ? mapData.context : '';
+                const promptText = getMapContextForCurrentChat();
                 generate_data.messages.forEach(msg => {
                     if (msg && msg.content && typeof msg.content === 'string' && msg.content.includes('{{bb_map}}')) {
                         msg.content = msg.content.replace(/\{\{bb_map\}\}/g, promptText);

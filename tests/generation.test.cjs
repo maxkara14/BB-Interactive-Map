@@ -137,7 +137,7 @@ test('automatic scan follows character replies and saves only in automatic mode'
         globalThis.requests = 0;
         globalThis.mapTest = {
             queueAutoScan, resetAutoUpdate, settings,
-            handleGenerationStarted, handleMessageReceived, handleGenerationEnded,
+            handleGenerationStarted, handleMessageReceived, handleGenerationEnded, handleGenerationStopped,
             state: () => ({ status: autoStatus, candidate: autoCandidate }),
             setGenerating: value => { document.body.dataset.generating = value ? 'true' : undefined; },
             setScanning: value => { scanInProgress = value; },
@@ -197,6 +197,16 @@ test('automatic scan follows character replies and saves only in automatic mode'
     context.finishScan({ zones: [] });
     await running;
     assert.equal(map.state().status, 'idle');
+    map.resetAutoUpdate();
+    activeChat = { ...chat, chatId: 'chat-stopped', chat: [{ mes: 'Reply', is_user: false }] };
+    map.settings.autoUpdate = true;
+    map.handleGenerationStarted('normal');
+    map.handleMessageReceived(0, 'normal');
+    map.handleGenerationStopped();
+    await timers.shift()();
+    assert.equal(context.requests, 5);
+    assert.equal(map.state().candidate, null);
+    map.handleGenerationStarted('normal');
     assert.equal(map.state().candidate, null);
 
     context.holdScan = false;
@@ -239,4 +249,12 @@ test('automatic scan follows character replies and saves only in automatic mode'
     await staleScan;
     assert.equal(saves, 1);
     assert.equal(map.state().status, 'idle');
+    map.handleGenerationStarted('normal');
+    map.handleMessageReceived(0, 'normal');
+    const stoppedScan = timers.shift()();
+    map.handleGenerationStopped();
+    context.finishScan({ zones: [] });
+    await stoppedScan;
+    assert.equal(saves, 1);
+    assert.equal(map.state().candidate, null);
 });

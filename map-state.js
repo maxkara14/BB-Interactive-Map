@@ -24,6 +24,25 @@ export function poiName(poi) {
     return typeof poi === 'string' ? poi : optionalText(poi?.name);
 }
 
+export function getMapMode(metadata) {
+    return metadata?.bb_map_mode === 'game' ? 'game' : 'classic';
+}
+
+// The grid is centered on the player's last saved position. A draft never moves it.
+export function getMapTransition(raw, position) {
+    if (!POSITIONS.has(position) || position === 'center') return null;
+    const center = raw?.zones?.find(zone => zone.position === 'center');
+    const destination = raw?.zones?.find(zone => zone.position === position);
+    return center && destination ? { from: center, to: destination } : null;
+}
+
+export function createTravelDraft(existing, transition, language) {
+    const action = language === 'ru'
+        ? `Я направляюсь из зоны «${transition.from.name}» в зону «${transition.to.name}».`
+        : `I head from "${transition.from.name}" to "${transition.to.name}".`;
+    return existing ? `${existing}\n\n${action}` : action;
+}
+
 function entityKey(type, name) {
     return `${type}:${name.normalize('NFKC').trim().toLowerCase()}`;
 }
