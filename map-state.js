@@ -47,6 +47,57 @@ function entityKey(type, name) {
     return `${type}:${name.normalize('NFKC').trim().toLowerCase()}`;
 }
 
+function objectState(source) {
+    if (source?.item_state === undefined) return {};
+    if (!['zone', 'held', 'unknown'].includes(source.item_state)
+        || (source.uncertain !== undefined && typeof source.uncertain !== 'boolean')) throw new Error('invalid_map');
+    const holder = optionalText(source.holder);
+    if (source.item_state === 'held' && !holder) throw new Error('invalid_map');
+    return { item_state: source.item_state, holder: source.item_state === 'held' ? holder : '',
+        state_reason: optionalText(source.state_reason), uncertain: source.uncertain === true,
+        last_known: optionalText(source.last_known) };
+}
+
+export function getMapObjects(raw) {
+    return [...(raw?.zones || []).flatMap(zone => (zone.poi || []).map(value => ({
+        ...(typeof value === 'object' ? value : { name: value }), zone: zone.name, position: zone.position,
+    }))), ...(raw?.unlocated_objects || []).map(value => ({ ...value, zone: '', position: '' }))];
+}
+
+// Missing from a scan means unknown whereabouts, never destruction or a dropped item.
+export function reconcileMapObjects(next, previous = null) {
+    const previousItems = getMapObjects(previous);
+    const previousById = new Map(previousItems.filter(item => item.id).map(item => [item.id, item]));
+    const lastKnown = item => item?.item_state === 'held' ? item.holder : item?.last_known || item?.zone || '';
+    const withState = item => {
+        const old = previousById.get(item.id);
+        const state = objectState(item.item_state ? item : { ...old, item_state: old?.item_state || 'zone' });
+        if (state.item_state === 'unknown' && !state.last_known) state.last_known = lastKnown(old);
+        return { ...item, ...state };
+    };
+    const unlocated = (next.unlocated_objects || []).map(withState);
+    const currentNames = new Set(getMapObjects(next).map(item => entityKey('object', item.name)));
+    for (const item of previousItems) {
+        if (currentNames.has(entityKey('object', item.name))) continue;
+        unlocated.push({ id: item.id, name: item.name, description: optionalText(item.description),
+            item_state: 'unknown', holder: '', uncertain: true,
+            state_reason: '',
+            last_known: lastKnown(item) });
+    }
+    return { ...next, zones: next.zones.map(zone => ({ ...zone, poi: zone.poi.map(withState) })), unlocated_objects: unlocated };
+}
+
+export function requiresObjectReview(previous, next, playerName = '') {
+    const changed = getMapChanges(previous, next).filter(change => change.type === 'object');
+    const objects = getMapObjects(next);
+    const holders = new Set([playerName, ...(previous?.zones || []).flatMap(zone => (zone.characters || []).map(char => char.name)),
+        ...(next?.zones || []).flatMap(zone => (zone.characters || []).map(char => char.name))].filter(Boolean));
+    return changed.some(change => change.ambiguous || objects.some(item => item.name === change.name
+        && (item.uncertain || (item.item_state === 'held' && !holders.has(item.holder))
+            || (item.item_state && !item.state_reason
+                && (change.action === 'moved' || change.fields.some(field => ['item_state', 'holder'].includes(field.key)))))));
+}
+
 function previousEntityIds(previousRaw) {
     const names = new Map();
     let nextId = 1;
@@ -63,6 +114,13 @@ function previousEntityIds(previousRaw) {
                 if (match) nextId = Math.max(nextId, Number(match[1]) + 1);
             }
         }
+    }
+    for (const item of previousRaw?.unlocated_objects || []) {
+        if (!item?.name || typeof item.id !== 'string') continue;
+        const key = entityKey('object', item.name);
+        names.set(key, [...(names.get(key) || []), item.id]);
+        const match = /^bbm-(\d+)$/.exec(item.id);
+        if (match) nextId = Math.max(nextId, Number(match[1]) + 1);
     }
     return { names, nextId };
 }
@@ -85,6 +143,7 @@ export function normalizeMapData(input, previousRaw = null) {
             poi: (Array.isArray(source.poi) ? source.poi : []).map(item => ({
                 name: requiredText(poiName(item)),
                 description: typeof item === 'object' ? optionalText(item?.description) : '',
+                ...objectState(item),
             })),
             characters: (Array.isArray(source.characters) ? source.characters : []).map(char => ({
                 name: requiredText(char?.name),
@@ -109,8 +168,15 @@ export function normalizeMapData(input, previousRaw = null) {
     if (!zonesByPosition.size) throw new Error('invalid_map');
 
     const zones = [...zonesByPosition.values()];
+    if (input.unlocated_objects !== undefined && !Array.isArray(input.unlocated_objects)) throw new Error('invalid_map');
+    const unlocated = (input.unlocated_objects || []).map(item => {
+        const state = objectState(item);
+        if (!state.item_state || state.item_state === 'zone') throw new Error('invalid_map');
+        return { name: requiredText(item.name), description: optionalText(item.description), ...state };
+    });
     const counts = new Map();
-    for (const zone of zones) {
+    const entityZones = [...zones, { poi: unlocated, characters: [] }];
+    for (const zone of entityZones) {
         for (const [type, entries] of [['character', zone.characters], ['object', zone.poi]]) {
             for (const entry of entries) {
                 const key = entityKey(type, entry.name);
@@ -120,7 +186,7 @@ export function normalizeMapData(input, previousRaw = null) {
     }
     const previous = previousEntityIds(previousRaw);
     const used = new Set();
-    for (const zone of zones) {
+    for (const zone of entityZones) {
         for (const [type, entries] of [['character', zone.characters], ['object', zone.poi]]) {
             for (const entry of entries) {
                 const key = entityKey(type, entry.name);
@@ -135,6 +201,7 @@ export function normalizeMapData(input, previousRaw = null) {
         schematic_name: requiredText(input.schematic_name),
         atmosphere: optionalText(input.atmosphere),
         zones,
+        ...(input.unlocated_objects !== undefined ? { unlocated_objects: unlocated } : {}),
     };
 }
 
@@ -145,7 +212,8 @@ export function buildMapContextString(mapData) {
         const characters = Array.isArray(zone.characters) && zone.characters.length
             ? ` Characters: ${zone.characters.map(c => `${c.name} (${c.mood || ''}, attitude: ${c.attitude || ''})`).join(', ')}.` : '';
         const objects = Array.isArray(zone.poi) && zone.poi.length
-            ? ` Objects: ${zone.poi.map(poiName).join(', ')}.` : '';
+            ? ` Objects: ${zone.poi.map(item => `${poiName(item)}${item.item_state === 'held' ? ` (held by ${item.holder})`
+                : item.item_state === 'unknown' ? ' (whereabouts unknown)' : ''}`).join(', ')}.` : '';
         let threat = '';
         if (zone.threat_level === 'danger') threat = ` [🔴 DANGER: ${zone.threat_reason || 'Unknown'}]`;
         else if (zone.threat_level === 'tension') threat = ` [🟠 Tension: ${zone.threat_reason || 'Suspicious'}]`;
@@ -154,6 +222,8 @@ export function buildMapContextString(mapData) {
             context += `Zone "${zone.name}" (${zone.position})${threat}: ${zone.summary || ''}${characters}${objects} `;
         }
     }
+    if (mapData.unlocated_objects?.length) context += `Remembered objects outside the current grid: ${mapData.unlocated_objects.map(item =>
+        `${item.name} (${item.item_state === 'held' ? `held by ${item.holder}` : `whereabouts unknown${item.last_known ? `; last known: ${item.last_known}` : ''}`})`).join(', ')}. `;
     return `${context}]`;
 }
 
@@ -194,7 +264,7 @@ export function getMapChanges(previous, next) {
     }
     const entries = (raw, type) => {
         const groups = new Map();
-        for (const zone of raw?.zones || []) {
+        for (const zone of [...(raw?.zones || []), { poi: raw?.unlocated_objects || [], characters: [], position: '' }]) {
             for (const value of zone[type === 'character' ? 'characters' : 'poi'] || []) {
                 const name = poiName(value);
                 if (!name) continue;
@@ -203,6 +273,7 @@ export function getMapChanges(previous, next) {
                 if (type === 'character') {
                     for (const field of ['mood', 'attitude', 'thought']) entry[field] = optionalText(value?.[field]);
                 }
+                else for (const field of ['item_state', 'holder', 'state_reason', 'last_known']) entry[field] = optionalText(value?.[field]);
                 groups.set(key, [...(groups.get(key) || []), entry]);
             }
         }
@@ -216,7 +287,7 @@ export function getMapChanges(previous, next) {
             const after = afterGroups.get(key) || [];
             const name = (after[0] || before[0]).name;
             if (before.length <= 1 && after.length <= 1) {
-                const keys = type === 'character' ? ['description', 'mood', 'attitude', 'thought'] : ['description'];
+                const keys = type === 'character' ? ['description', 'mood', 'attitude', 'thought'] : ['description', 'item_state', 'holder', 'state_reason', 'last_known'];
                 if (before.length && after.length) keys.unshift('name');
                 const fields = fieldsChanged(before[0], after[0], keys);
                 const action = !before.length ? 'added' : !after.length ? 'removed'

@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
@@ -248,6 +248,8 @@ function mapFieldLabel(key) {
         threat_level: ['Угроза', 'Threat'], threat_reason: ['Причина угрозы', 'Threat reason'],
         description: ['Описание', 'Description'], mood: ['Состояние', 'Mood'],
         attitude: ['Отношение', 'Attitude'], thought: ['Мысль', 'Thought'],
+        item_state: ['Положение предмета', 'Object state'], holder: ['У кого', 'Holder'],
+        state_reason: ['Основание в истории', 'Narrative evidence'], last_known: ['Последнее известное положение', 'Last known whereabouts'],
     };
     return tr(...labels[key]);
 }
@@ -264,6 +266,23 @@ function mapPositionLabel(position) {
 function mapThreatLabel(value) {
     return value === 'danger' ? tr('Опасность', 'Danger')
         : value === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
+}
+
+function mapItemStateLabel(value) {
+    return value === 'held' ? tr('У персонажа', 'Held by a character')
+        : value === 'unknown' ? tr('Местоположение неизвестно', 'Whereabouts unknown') : tr('В зоне', 'In the zone');
+}
+
+function mapObjectLabel(item) {
+    return `${mapItemStateLabel(item.item_state || 'zone')}${item.holder ? ` · ${item.holder}` : ''}${item.last_known ? ` · ${tr('ранее:', 'last known:')} ${item.last_known}` : ''}`;
+}
+
+function mapObjectsHtml(data) {
+    const objects = getMapObjects(data);
+    return `<details class="bb-map-review bb-map-objects"><summary>${tr('Предметы сцены', 'Scene objects')} <span>${objects.length}</span></summary>
+        <p>${tr('Положение подтверждается событиями истории. Правки доступны через «Править карту».', 'Whereabouts follow narrative events. Use Edit map to correct them.')}</p>
+        <ul>${objects.map(item => `<li class="bb-map-change"><strong>${escapeHtml(item.name)}</strong><div>${escapeHtml(mapObjectLabel(item))}${item.item_state !== 'unknown' && item.zone ? ` · ${escapeHtml(item.zone)}` : ''}</div>
+        ${item.state_reason ? `<small>${escapeHtml(item.state_reason)}</small>` : ''}</li>`).join('')}</ul></details>`;
 }
 
 function mapChangesHtml(previous, next) {
@@ -286,8 +305,9 @@ function mapChangesHtml(previous, next) {
             ${change.position ? `<small>${escapeHtml(mapPositionLabel(change.position))}</small>` : ''}
             ${change.from || change.to ? `<div class="bb-map-change-values"><span>${escapeHtml(locations(previous, change.from))}</span><b>→</b><span>${escapeHtml(locations(next, change.to))}</span></div>` : ''}
             ${change.ambiguous ? `<p class="bb-map-change-warning">${tr('Имя повторяется. Нельзя однозначно определить, какая запись изменилась.', 'Repeated name. The changed entry cannot be identified unambiguously.')}</p>` : ''}
-            ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.before) : field.before || '—')}</span><b>→</b><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.after) : field.after || '—')}</span></div></div>`).join('')}
+            ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.before) : field.key === 'item_state' ? mapItemStateLabel(field.before) : field.before || '—')}</span><b>→</b><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.after) : field.key === 'item_state' ? mapItemStateLabel(field.after) : field.after || '—')}</span></div></div>`).join('')}
         </li>`).join('')}</ul>` : `<p>${tr('Изменений нет.', 'No changes.')}</p>`}
+        ${getMapMode(chat_metadata) === 'game' && requiresObjectReview(previous, next, SillyTavern.getContext().name1) ? `<p class="bb-map-change-warning">${tr('Положение некоторых предметов неоднозначно. Проверьте изменения перед сохранением; автосохранение приостановлено.', 'Some object whereabouts are uncertain. Review before saving; automatic saving is paused.')}</p>` : ''}
     </details>`;
 }
 
@@ -408,6 +428,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
             </div>
 
             ${gameMode ? `<section id="bb-map-travel" class="bb-map-travel" aria-live="polite"><p>${tr('Выберите соседнюю зону для перехода.', 'Select a neighboring zone to travel.')}</p></section>` : ''}
+            ${getMapMode(chat_metadata) === 'game' ? mapObjectsHtml(data) : ''}
             ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
 
             <div class="bb-map-controls">
@@ -622,7 +643,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     const field = (target, key, value, options = null, required = false, label = mapFieldLabel(key)) => {
         const wrapper = document.createElement('label');
         wrapper.textContent = label;
-        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere'].includes(key) ? 'textarea' : 'input');
+        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere', 'state_reason'].includes(key) ? 'textarea' : 'input');
         if (options) for (const [optionValue, text] of options) {
             const option = document.createElement('option');
             option.value = optionValue;
@@ -641,15 +662,23 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     field(scene, 'schematic_name', data.schematic_name, null, true);
     field(scene, 'atmosphere', data.atmosphere);
     const destinations = data.zones.map((zone, index) => [String(index), `${zone.name} · ${mapPositionLabel(zone.position)}`]);
+    const editObjects = getMapMode(chat_metadata) === 'game';
     const addEntity = (target, type, entry, zoneIndex) => {
         const block = document.createElement('fieldset');
         block.dataset.entityType = type;
+        block._originalEntry = entry;
         const legend = document.createElement('legend');
         legend.textContent = type === 'character' ? tr('Персонаж', 'Character') : tr('Предмет', 'Object');
         block.append(legend);
         field(block, 'name', poiName(entry), null, true);
         field(block, 'description', entry?.description);
-        field(block, 'destination', String(zoneIndex), destinations, false, tr('Зона', 'Zone'));
+        field(block, 'destination', String(zoneIndex), type === 'object' && (editObjects || zoneIndex === '')
+            ? [...destinations, ['', tr('Вне текущей сетки', 'Outside the current grid')]] : destinations, false, tr('Зона', 'Zone'));
+        if (type === 'object' && editObjects) {
+            field(block, 'item_state', entry?.item_state || (zoneIndex === '' ? 'unknown' : 'zone'), ['zone', 'held', 'unknown'].map(value => [value, mapItemStateLabel(value)]));
+            field(block, 'holder', entry?.holder);
+            field(block, 'state_reason', entry?.state_reason);
+        }
         if (type === 'character') for (const key of ['mood', 'attitude', 'thought']) field(block, key, entry?.[key]);
         const remove = document.createElement('button');
         remove.type = 'button';
@@ -689,6 +718,12 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         body.append(actions);
         form.querySelector('.bb-map-edit-zones').append(section);
     });
+    if (data.unlocated_objects?.length) {
+        const memory = document.createElement('div');
+        memory.className = 'bb-map-edit-entities';
+        for (const item of data.unlocated_objects) addEntity(memory, 'object', item, '');
+        form.querySelector('.bb-map-edit-zones').append(memory);
+    }
     const cancel = () => {
         showRadarModal(data, isSavedMap, chatForMap, expectedMap);
         document.getElementById('bb-map-edit-btn')?.focus();
@@ -712,9 +747,19 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
                 ...readFields(section.querySelector('.bb-map-edit-zone-body')), position: data.zones[index].position, poi: [], characters: [],
             })) };
             for (const block of form.querySelectorAll('[data-entity-type]')) {
-                const { destination, ...entry } = readFields(block);
+                const { destination, ...fields } = readFields(block);
+                const entry = { ...block._originalEntry, ...fields };
+                if (block.dataset.entityType === 'object') {
+                    if (editObjects) entry.uncertain = false; // The player explicitly reviews manual corrections.
+                    if (entry.item_state !== 'unknown') entry.last_known = '';
+                    if (destination === '') {
+                        (draft.unlocated_objects ||= []).push(entry);
+                        continue;
+                    }
+                }
                 draft.zones[Number(destination)][block.dataset.entityType === 'character' ? 'characters' : 'poi'].push(entry);
             }
+            if (data.unlocated_objects && !draft.unlocated_objects) draft.unlocated_objects = [];
             const edited = normalizeMapData(draft, expectedMap?.raw);
             if (autoCandidate === data) autoCandidate = edited;
             showRadarModal(edited, false, chatForMap, expectedMap);
@@ -722,7 +767,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             const message = form.querySelector('.bb-map-edit-error');
             message.hidden = false;
             message.textContent = error.message === 'invalid_map'
-                ? tr('Проверьте названия зон, персонажей и предметов.', 'Check the zone, character, and object names.') : error.message;
+                ? tr('Проверьте названия. Для предмета у персонажа укажите владельца; вне сетки выберите «У персонажа» или «Местоположение неизвестно».', 'Check names. Held objects need a holder; outside the grid choose Held or Unknown whereabouts.') : error.message;
             message.scrollIntoView({ block: 'nearest' });
         }
     };
@@ -754,12 +799,14 @@ async function createMapCandidate(chatForScan, scaleMode) {
     const prompt = MAP_PROMPT
         .replace('{{lastMessages}}', recentMessages)
         .replace('{{scaleInstruction}}', scaleInstruction + (modeForScan === 'game'
-            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale.' : ''))
+            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current grid may be listed in top-level unlocated_objects with the same fields and state held or unknown; never invent a zone to hold them.' : ''))
         .replace('{{previousMap}}', prevMapInstruction);
     const result = await generateMapFast(prompt);
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan) return null;
-    return normalizeMapData(extractJSON(result), prevData?.raw);
+    const candidate = normalizeMapData(extractJSON(result), prevData?.raw);
+    return modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
+        ? reconcileMapObjects(candidate, prevData?.raw) : candidate;
 }
 
 async function triggerMapScan(btnElement, scaleMode = 'local') {
@@ -838,7 +885,7 @@ function queueAutoScan(chatForScan) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
                 return;
             }
-            if (settings.autoApply) {
+            if (settings.autoApply && !(getMapMode(chat_metadata) === 'game' && requiresObjectReview(baseMap.raw, candidate, chatForScan.name1))) {
                 chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
                 await saveChatConditional();
                 if (isSameChat(chatForScan, SillyTavern.getContext())) {
@@ -1411,6 +1458,7 @@ jQuery(async () => {
                 source: tr('По сохранённой карте', 'From the saved map'),
                 mood: tr('Состояние', 'Mood'), attitude: tr('Отношение', 'Attitude'), reason: tr('Обстановка', 'Conditions'),
                 position: mapPositionLabel, threat: mapThreatLabel,
+                objectState: mapObjectLabel,
             }),
             onOpenMap: () => {
                 const current = getMapDataForCurrentChat();

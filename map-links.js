@@ -21,7 +21,8 @@ export function createMapMentionIndex(raw) {
         if (typeof zone.name === 'string') add({ type: 'zone', name: zone.name.trim(), description: zone.summary || '',
             threat: zone.threat_level || 'safe', reason: zone.threat_reason || '', ...location });
         for (const value of Array.isArray(zone.poi) ? zone.poi : []) {
-            add({ type: 'object', name: poiName(value), description: value?.description || '', ...location });
+            add({ type: 'object', name: poiName(value), description: value?.description || '',
+                item_state: value?.item_state, holder: value?.holder || '', last_known: value?.last_known || '', ...location });
         }
         for (const value of Array.isArray(zone.characters) ? zone.characters : []) {
             const entry = { type: 'character', name: poiName(value), description: value?.description || '',
@@ -34,6 +35,9 @@ export function createMapMentionIndex(raw) {
                 }
             }
         }
+    }
+    for (const item of raw?.unlocated_objects || []) {
+        add({ ...item, type: 'object', zone: '', position: '' });
     }
     const entries = new Map([...groups].filter(([, values]) => values.length === 1).map(([key, values]) => [key, values[0]]));
     // Ambiguous long names still block shorter matches inside their phrase.
@@ -189,7 +193,9 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         description.textContent = entry.description || labels.noDescription;
         const location = document.createElement('p');
         location.className = 'bb-map-mention-location';
-        location.textContent = `📍 ${entry.zone} · ${labels.position(entry.position)}`;
+        location.textContent = entry.type === 'object' && entry.item_state && labels.objectState
+            ? `📍 ${labels.objectState(entry)}${entry.item_state !== 'unknown' && entry.zone ? ` · ${entry.zone}` : ''}`
+            : `📍 ${entry.zone} · ${labels.position(entry.position)}`;
         card.append(tag, heading, close, description, location);
         for (const [field, title] of [['mood', labels.mood], ['attitude', labels.attitude], ['reason', labels.reason]]) {
             if (!entry[field]) continue;

@@ -116,6 +116,7 @@ test('automatic scan follows character replies and saves only in automatic mode'
         isChatSaving: false,
         saveChatConditional: async () => { saves++; },
         createSavedMap: (candidate, previous) => ({ raw: candidate, previous }),
+        getMapMode: (await import('../map-state.js')).getMapMode,
         SillyTavern: { getContext: () => activeChat },
         navigator: { language: 'en-US' },
         document: { body: { dataset: {} } },
