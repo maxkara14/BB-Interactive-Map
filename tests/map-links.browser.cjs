@@ -163,12 +163,32 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
             document.getElementById('new-reply').textContent = 'ТанджироㅤИбукиㅤАой-сан. ИбукиㅤКуробати. Кедровыеㅤполовицы.';
             renderMapWidget();
         });
-        await page.waitForFunction(() => document.querySelectorAll('#new-reply [data-bb-map-mention]').length === 5);
+        await page.waitForFunction(() => document.querySelectorAll('#new-reply [data-bb-map-mention]').length === 4);
         assert.equal(await page.locator('#new-reply').textContent(), 'ТанджироㅤИбукиㅤАой-сан. ИбукиㅤКуробати. Кедровыеㅤполовицы.');
         await page.getByRole('button', { name: 'Character: Аой Кандзаки', exact: true }).click();
         assert.match(await page.locator('#bb-map-mention-card').innerText(), /Аой Кандзаки/);
         await page.keyboard.press('Escape');
-        assert.equal(await page.getByRole('button', { name: 'Character: Ибуки Куробати', exact: true }).count(), 2);
+        assert.equal(await page.getByRole('button', { name: 'Character: Ибуки Куробати', exact: true }).count(), 1);
+        await page.evaluate(() => {
+            document.getElementById('new-reply').innerHTML = '<p>Аой Кандзаки взяла Кедровые половицы.</p><p><em>Аой</em> и <b>Кандзаки</b>. АОЙ-сан. Кедровыеㅤполовицы.</p>';
+            const message = document.createElement('article');
+            message.className = 'mes';
+            message.innerHTML = '<div class="mes_text" id="user-reply"><p>Кандзаки. Аой Кандзаки.</p><p>Кедровые половицы. Кедровые половицы.</p></div>';
+            document.getElementById('chat').append(message);
+            chatMapLinks.refresh();
+        });
+        await page.waitForFunction(() => document.querySelectorAll('#new-reply [data-bb-map-mention]').length === 2
+            && document.querySelectorAll('#user-reply [data-bb-map-mention]').length === 2);
+        assert.equal(await page.locator('#new-reply [data-bb-map-mention]').first().textContent(), 'Аой Кандзаки');
+        assert.equal(await page.locator('#user-reply [data-bb-map-mention]').first().textContent(), 'Кандзаки');
+        assert.equal(await page.locator('#new-reply em').textContent(), 'Аой');
+        await page.locator('#new-reply [data-bb-map-mention]').first().click();
+        assert.match(await page.locator('#bb-map-mention-card').innerText(), /Аой Кандзаки/);
+        await page.keyboard.press('Escape');
+        await page.evaluate(() => { chatMapLinks.refresh(); chatMapLinks.refresh(); });
+        await page.waitForTimeout(250);
+        assert.equal(await page.locator('#new-reply [data-bb-map-mention]').count(), 2);
+        assert.equal(await page.locator('#user-reply [data-bb-map-mention]').count(), 2);
         await page.evaluate(() => chatMapLinks.destroy());
         assert.equal(await mentions.count(), 0);
         assert.equal(await page.locator('.mes_text').first().textContent(), initialText);

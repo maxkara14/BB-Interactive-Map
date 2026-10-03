@@ -7,6 +7,22 @@ const raw = { zones: [{ position: 'center', name: 'Двор', summary: 'Солн
     characters: [{ name: 'Ибуки Куробати', mood: 'Сердита' }],
 }] };
 
+test('message scope counts a character once across full name, aliases, case and honorifics', () => {
+    const index = createMapMentionIndex(raw);
+    const seen = new Set();
+    assert.deepEqual(findMapMentions('Ибуки Куробати; ИБУКИ; Куробати; Ибуки-сан.', index, seen).map(m => m.text), ['Ибуки Куробати']);
+    assert.deepEqual(findMapMentions('Куробати и Ибуки. Двор, ДВОР. Медный ключ, медныйㅤключ.', index, seen).map(m => m.text), ['Двор', 'Медный ключ']);
+    assert.deepEqual(findMapMentions('Куробати. Ибуки Куробати.', index, new Set()).map(m => m.text), ['Куробати']);
+});
+
+test('English aliases share one slot; distinct entities and a new message retain their slots', () => {
+    const index = createMapMentionIndex({ zones: [{ name: 'Hall', poi: ['Key'], characters: [{ name: 'John Smith' }, { name: 'Jane Brown' }] }] });
+    const text = 'John-san, John Smith, SMITH, Jane Brown, Brown. Key, KEY. Hall, Hall.';
+    const expected = ['John', 'Jane Brown', 'Key', 'Hall'];
+    assert.deepEqual(findMapMentions(text, index, new Set()).map(m => m.text), expected);
+    assert.deepEqual(findMapMentions(text, index, new Set()).map(m => m.text), expected);
+});
+
 test('mentions match full names case-insensitively with Cyrillic word boundaries', () => {
     const index = createMapMentionIndex(raw);
     const text = '🔑 ИБУКИ КУРОБАТИ нашла Медный ключ во дворе. Двор, ключик, ключ-подделка и ключом.';

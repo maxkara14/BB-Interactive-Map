@@ -56,9 +56,14 @@ export function createMapMentionIndex(raw) {
     return { entries, pattern };
 }
 
-export function findMapMentions(text, index) {
+export function findMapMentions(text, index, seenEntities = null) {
     if (!index.pattern) return [];
-    return [...text.matchAll(index.pattern)].filter(match => index.entries.has(mentionKey(match[0]))).map(match => ({
+    return [...text.matchAll(index.pattern)].filter(match => {
+        const entry = index.entries.get(mentionKey(match[0]));
+        if (!entry || seenEntities?.has(entry)) return false;
+        seenEntities?.add(entry);
+        return true;
+    }).map(match => ({
         start: match.index, end: match.index + match[0].length, text: match[0], key: mentionKey(match[0]),
     }));
 }
@@ -109,8 +114,10 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         });
         const nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
+        // Aliases share an index entry. Count once across all text nodes in this message.
+        const seenEntities = new Set();
         for (const node of nodes) {
-            const matches = findMapMentions(node.data, index);
+            const matches = findMapMentions(node.data, index, seenEntities);
             if (!matches.length) continue;
             const fragment = document.createDocumentFragment();
             let offset = 0;
