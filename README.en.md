@@ -4,13 +4,11 @@
 
 A **SillyTavern** extension that turns story events into a map of places and passages. Track your position, characters, objects and scene conditions, and give the model spatial memory of the current chat.
 
-**2.0 preview · branch `map_test`**
-
-This branch contains the upcoming 2.0 release. The manifest still reports **1.1.0**; it will change to **2.0.0** when the approved build moves to `main`. The changelog compares this preview with the main version of the map.
+**Version 2.0**
 
 ![BB Interactive Map — actual interface overview](docs/images/overview.en.png)
 
-Actual extension components with an example scene, arranged for this overview. [Full-size image](docs/images/overview.en.png) · [Russian overview](docs/images/overview.ru.png).
+[Full-size image](docs/images/overview.en.png) · [Russian overview](docs/images/overview.ru.png).
 
 ## Features
 
@@ -26,19 +24,13 @@ Actual extension components with an example scene, arranged for this overview. [
 | **RU / EN** | Browser language, Russian or English interface; descriptions follow the chat language |
 | **Three sources** | Current connection, Connection Manager profile or OpenAI-compatible Custom API |
 
-## Install the preview
+## Installation
 
 1. Open **Extensions → Install extension** in SillyTavern.
 2. Paste `https://github.com/maxkara14/BB-Interactive-Map`.
-3. Select **`map_test`** in the branch selector in **Manage extensions**. Default installation uses `main`.
-4. Reload the page. If the old interface remains, use **Ctrl+F5** on desktop.
+3. Reload the page. If the old interface remains, use **Ctrl+F5** on desktop.
 
-Enhance Gen and VNE are optional. Their integrations require compatible versions:
-
-| Extension | Preview branch |
-|---|---|
-| [BB Enhance Generation](https://github.com/maxkara14/BB-Enhance-Gen) | `codex/map-travel-api` |
-| [BB Visual Novel Engine](https://github.com/maxkara14/BB-Visual-Novel-Engine) | `codex/map-context-api` |
+Install [BB Enhance Generation](https://github.com/maxkara14/BB-Enhance-Gen) for generated travel descriptions. [BB Visual Novel Engine](https://github.com/maxkara14/BB-Visual-Novel-Engine) can also use the map when generating response options. These integrations are optional; update the extensions to access their map-context settings.
 
 ## Quick start
 
@@ -47,8 +39,6 @@ Enhance Gen and VNE are optional. Their integrations require compatible versions
 3. Under **Current chat map**, choose **Current scene** or **Surroundings**, then **Run new scan**. The floating button also offers the first scan when no map exists.
 4. Review the proposal. Use **Edit map** if needed, then save.
 5. Open the saved map from the mini-map. **Update map** starts another scan; **Cancel generation** is available in the map and settings during a request. A saved map shows **✅ Already saved**.
-
-The old extension-menu terminal has been replaced by settings and the floating widget.
 
 ## Read and edit the map
 
@@ -120,12 +110,6 @@ These use the saved map of the active chat. Without a map or with the switch off
 | **Custom API** | Separate OpenAI-compatible URL, key and model; browser request |
 
 An unavailable profile reports an error. Custom API failures fall back to the current connection; cancellation does not trigger fallback. Scan output allowance is **10,000 tokens**, subject to provider limits. Map quality depends on the model and evidence in recent messages.
-
-## Development and release
-
-[Changelog](CHANGELOG.md#english) · [Roadmap](ROADMAP.md) · [Map format and read-only API](docs/map-format-v3.md) · [Rebuild the overview](docs/overview.md)
-
-The author has confirmed manual testing. This preview awaits final review before merging into `main` and changing the version to 2.0.0.
 
 ## Author
 
