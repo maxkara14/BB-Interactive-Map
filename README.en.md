@@ -41,3 +41,8 @@ In SillyTavern, open **Extensions → Install extension** and enter:
 `https://github.com/maxkara14/BB-Interactive-Map`
 
 Reload the page. Open **Extensions settings → BB Interactive Map → Current chat map** to run the first scan.
+
+
+### Opening the map on a phone
+
+On phones, a square button opens the full map instead of expanding the mini-map. When no saved map exists, it offers a manual scan followed by preview and save. The button can be dragged; disable it in extension settings. The dialog follows the visible viewport height and keeps its bottom actions accessible while scrolling.

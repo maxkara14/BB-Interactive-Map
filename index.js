@@ -529,7 +529,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         const note = document.createElement('p');
         if (!transition) {
             note.textContent = position === 'center'
-                ? tr('Вы уже в центральной зоне по сохранённой карте.', 'You are already in the center zone according to the saved map.')
+                ? tr('Вы уже здесь по сохранённой карте.', 'You are already here according to the saved map.')
                 : tr('Выберите соседнюю зону для перехода. Для переходов карта должна содержать центральную зону.', 'Select a neighboring zone to travel. Travel requires a center zone on the map.');
             panel.append(note);
             return;
@@ -792,7 +792,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         field(block, 'name', poiName(entry), null, true);
         field(block, 'description', entry?.description);
         field(block, 'destination', String(zoneIndex), type === 'object' && (editObjects || zoneIndex === '')
-            ? [...destinations, ['', tr('Вне текущей сетки', 'Outside the current grid')]] : destinations, false, tr('Зона', 'Zone'));
+            ? [...destinations, ['', tr('Вне текущей карты', 'Outside the current map')]] : destinations, false, tr('Зона', 'Zone'));
         if (type === 'object' && editObjects) {
             field(block, 'item_state', entry?.item_state || (zoneIndex === '' ? 'unknown' : 'zone'), ['zone', 'held', 'unknown', 'left'].map(value => [value, mapItemStateLabel(value)]));
             field(block, 'holder', entry?.holder);
@@ -1214,7 +1214,7 @@ function setupExtensionSettings(rebuild = false) {
     const title = document.createElement('strong');
     title.textContent = tr('Карта и память сцены', 'Map and scene memory');
     const description = document.createElement('p');
-    description.textContent = tr('Сканирование и управление памятью находятся в настройках.', 'Scan and manage map memory here.');
+    description.textContent = tr('Карта текущего чата, обновления и подключение модели.', 'Current chat map, updates and model connection.');
     intro.append(title, description);
     body.append(intro);
 
@@ -1307,7 +1307,7 @@ function setupExtensionSettings(rebuild = false) {
             setupExtensionSettings(true);
             renderMapWidget();
         });
-    checkbox(general, tr('Показывать виджет сохранённой карты', 'Show saved map widget'), settings.showWidget, checked => {
+    checkbox(general, tr('Показывать кнопку и виджет карты', 'Show map button and widget'), settings.showWidget, checked => {
         settings.showWidget = checked;
         saveSettingsDebounced();
         renderMapWidget();
@@ -1356,8 +1356,8 @@ function setupExtensionSettings(rebuild = false) {
         });
     writingSelect.querySelector('option[value="enhance"]').disabled = !getEnhanceActionAPI();
     if (!getEnhanceActionAPI()) note(mapTools, tr('Генерация переходов доступна с Enhance Gen, поддерживающим API действий карты.', 'Generated travel requires Enhance Gen with the map action API.'));
-    note(mapTools, tr('В игровом режиме выберите соседнюю зону на полной карте, чтобы подготовить действие перехода. Центральная зона — текущее положение по карте.',
-        'In game mode, select a neighboring zone on the full map to prepare a travel action. The center zone is your current position on the map.'));
+    note(mapTools, tr('В игровом режиме выберите место на полной карте, чтобы подготовить переход по доступному маршруту. Текущее положение отмечено надписью «Вы здесь».',
+        'In game mode, select a place on the full map to prepare travel along an available route. Your current position is marked “You are here”.'));
     note(mapTools, savedMap?.context
         ? tr('Память локации активна.', 'Location memory is active.')
         : tr('Память локации пуста.', 'Location memory is empty.'));
@@ -1593,14 +1593,50 @@ function graphWidgetHtml(raw, changes = new Map()) {
         }).join('') + '</div>' + (layout.extra ? '<small>+' + layout.extra + ' ' + tr('на полной карте', 'on the full map') + '</small>' : '');
 }
 
+function showMapLaunchPrompt() {
+    const chatForPrompt = SillyTavern.getContext();
+    const focusBefore = document.activeElement;
+    removeMapOverlay();
+    const overlay = document.createElement('div');
+    overlay.id = 'bb-map-overlay'; overlay.className = 'bb-map-overlay';
+    overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', tr('Создать карту', 'Create map'));
+    overlay.innerHTML = `<div class="bb-map-modal bb-map-launch-prompt">
+        <div class="bb-map-title">${tr('Карта этого чата', 'Map of this chat')}</div>
+        <p>${tr('Карта ещё не создана. Сканирование соберёт места, персонажей и предметы из текущей сцены.', 'No map yet. A scan will collect places, characters and objects from the current scene.')}</p>
+        <div class="bb-map-controls"><button type="button" class="bb-map-btn" id="bb-map-create-btn">${tr('СОЗДАТЬ КАРТУ', 'CREATE MAP')}</button>
+        <button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ', 'CLOSE')}</button></div></div>`;
+    const close = () => { overlay.remove(); if (focusBefore?.isConnected) focusBefore.focus({ preventScroll: true }); };
+    overlay.querySelector('#bb-map-back-btn').onclick = close;
+    const scanButton = overlay.querySelector('#bb-map-create-btn');
+    scanButton.onclick = () => {
+        if (!isSameChat(chatForPrompt, SillyTavern.getContext()) || getMapDataForCurrentChat()?.raw) { close(); renderMapWidget(); return; }
+        triggerMapScan(scanButton, settings.scanScale);
+    };
+    overlay.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); close(); }
+        if (event.key === 'Tab') {
+            const buttons = [...overlay.querySelectorAll('button:not(:disabled)')];
+            const first = buttons[0], last = buttons.at(-1);
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        }
+    });
+    document.body.append(overlay);
+    requestAnimationFrame(() => { if (overlay.isConnected) { overlay.style.opacity = '1'; scanButton.focus({ preventScroll: true }); } });
+}
+
 function renderMapWidget() {
     chatMapLinks?.refresh();
     document.getElementById('bb-map-widget')?.remove();
     const mapData = getMapDataForCurrentChat();
-    if (!settings.showWidget || !Array.isArray(mapData?.raw?.zones)) return;
+    const widgetChat = SillyTavern.getContext();
+    if (!settings.showWidget || widgetChat.chatId == null) return;
 
     let raw;
-    try { raw = readMapState(mapData); } catch { return; }
+    try { raw = mapData?.raw ? readMapState(mapData) : null; } catch { return; }
+    const hasMap = !!raw;
+    raw ||= { zones: [], schematic_name: '' };
     const zones = new Map(raw.zones.filter(zone => zone && WIDGET_POSITIONS.includes(zone.position)).map(zone => [zone.position, zone]));
     const center = raw.layout === 'graph' ? raw.zones.find(zone => zone.id === raw.player_place_id) : zones.get('center');
     const level = center?.threat_level || 'unknown';
@@ -1608,14 +1644,16 @@ function renderMapWidget() {
         : level === 'safe' ? tr('Безопасно', 'Safe') : tr('Положение неизвестно', 'Position unknown');
     const widget = document.createElement('section');
     widget.id = 'bb-map-widget';
-    widget.className = `bb-map-widget bb-map-widget-${level}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;
-    const widgetChat = SillyTavern.getContext();
+    widget.className = `bb-map-widget bb-map-widget-${level}${hasMap ? '' : ' is-empty'}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;
     const previous = widgetMapSnapshot && isSameChat(widgetMapSnapshot.chat, widgetChat) ? widgetMapSnapshot.raw : raw;
     const visualChanges = getMapVisualChanges(raw, previous);
     widgetMapSnapshot = { chat: { chatId: widgetChat.chatId, characterId: widgetChat.characterId, groupId: widgetChat.groupId, chatMetadata: widgetChat.chatMetadata }, raw: structuredClone(raw) };
+    const updateReady = autoStatus === 'ready' && !!autoCandidate && isSameChat(autoCandidateChat, widgetChat) && mapData === autoCandidateBase;
+    const launchLabel = updateReady ? tr('Проверить обновление карты', 'Review map update') : hasMap ? tr('Открыть карту', 'Open map') : tr('Создать карту', 'Create map');
     widget.setAttribute('aria-label', tr('Виджет карты', 'Map widget'));
     widget.innerHTML = `
         <div class="bb-map-widget-header" tabindex="0" aria-label="${tr('Переместить виджет карты стрелками', 'Move map widget with arrow keys')}">
+            <button type="button" class="bb-map-widget-launch${updateReady ? ' has-update' : ''}" aria-label="${launchLabel}" title="${launchLabel}">▣</button>
             <span class="bb-map-widget-signal" aria-hidden="true"></span>
             <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
             ${autoStatus !== 'idle' && settings.autoUpdate ? `<span class="bb-map-widget-badge" aria-live="polite">${autoStatus === 'scanning'
@@ -1683,11 +1721,17 @@ function renderMapWidget() {
         button.onpointerenter = button.onfocus = () => highlight(true);
         button.onpointerleave = button.onblur = () => highlight(false);
     }
-    widget.querySelector('.bb-map-widget-open').onclick = () => {
+    const openMap = (reviewUpdate = false) => {
         const current = getMapDataForCurrentChat();
+        if (reviewUpdate && autoStatus === 'ready' && autoCandidate && isSameChat(autoCandidateChat, SillyTavern.getContext()) && current === autoCandidateBase) {
+            showRadarModal(autoCandidate, false, autoCandidateChat, autoCandidateBase); return;
+        }
         if (current?.raw) showRadarModal(current.raw, true);
-        else renderMapWidget();
+        else showMapLaunchPrompt();
     };
+    widget.querySelector('.bb-map-widget-open').onclick = () => openMap();
+    let wasDragged = false;
+    widget.querySelector('.bb-map-widget-launch').onclick = () => { if (!wasDragged) openMap(true); wasDragged = false; };
     for (const button of widget.querySelectorAll('[data-place-id]')) button.onclick = () => {
         const current = getMapDataForCurrentChat();
         if (current?.raw) { showRadarModal(current.raw, true); mapTopologyView?.select(button.dataset.placeId); }
@@ -1711,20 +1755,26 @@ function renderMapWidget() {
     const handle = widget.querySelector('.bb-map-widget-header');
     let drag = null;
     handle.addEventListener('pointerdown', event => {
-        if (event.target.closest('button')) return;
+        const button = event.target.closest('button');
+        if (button && !button.classList.contains('bb-map-widget-launch')) return;
+        wasDragged = false;
         const bounds = widget.getBoundingClientRect();
-        drag = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-        handle.setPointerCapture(event.pointerId);
+        drag = { x: event.clientX - bounds.left, y: event.clientY - bounds.top, startX: event.clientX, startY: event.clientY, capture: button || handle };
+        drag.capture.setPointerCapture(event.pointerId);
     });
     handle.addEventListener('pointermove', event => {
-        if (drag) setPosition(event.clientX - drag.x, event.clientY - drag.y);
+        if (!drag || (!wasDragged && Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < 6)) return;
+        wasDragged = true;
+        setPosition(event.clientX - drag.x, event.clientY - drag.y);
     });
     handle.addEventListener('pointerup', event => {
         if (!drag) return;
+        drag.capture.releasePointerCapture(event.pointerId);
         drag = null;
-        handle.releasePointerCapture(event.pointerId);
-        const bounds = widget.getBoundingClientRect();
-        setPosition(bounds.left, bounds.top, true);
+        if (wasDragged) {
+            const bounds = widget.getBoundingClientRect();
+            setPosition(bounds.left, bounds.top, true);
+        }
     });
     handle.addEventListener('pointercancel', () => { drag = null; });
     handle.addEventListener('keydown', event => {

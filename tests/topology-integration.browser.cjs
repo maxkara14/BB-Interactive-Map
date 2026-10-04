@@ -181,7 +181,8 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.equal(await page.locator('.bb-map-widget-arrow').count(), 1);
         if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-two.png') });
         await page.evaluate(() => { settings.uiLanguage = 'en'; renderMapWidget(); });
-        assert.match(await page.locator('.bb-map-widget-open').innerText(), /OPEN MAP/);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        assert.match(await page.locator('.bb-map-widget-open').innerText(), /OPEN MAP/i);
         assert.doesNotMatch(await page.locator('.bb-map-widget').innerText(), /Confirmed/);
         await page.evaluate(() => {
             const raw = structuredClone(miniHub.raw); raw.player_place_id = null;
@@ -278,7 +279,10 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             assert.equal(await page.locator('.bb-map-widget-place').count(), 4);
             assert.equal(await page.locator('.bb-map-widget-arrow').count(), 3);
             assert.match(await page.locator('.bb-map-widget-places').innerText(), /Кухонный переход/);
-            await page.locator('.bb-map-widget-places').evaluate(field => {
+            if (width <= 600) {
+                assert.equal(await page.locator('.bb-map-widget-launch').isVisible(), true);
+                assert.equal(await page.locator('.bb-map-widget-content').isVisible(), false);
+            } else await page.locator('.bb-map-widget-places').evaluate(field => {
                 const current = field.querySelector('.is-current'), labels = [...field.querySelectorAll('.bb-map-widget-place')];
                 for (const label of labels) if (label.scrollHeight > label.clientHeight + 1) throw Error('Mini label overflows');
                 const box = current.getBoundingClientRect();
@@ -290,6 +294,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             });
             if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'kitchen-mini-' + width + '.png') });
         }
+        await page.setViewportSize({ width: 1440, height: 1000 });
         await page.locator('.bb-map-widget-place').filter({ hasText: 'Кухонный переход' }).click();
         assert.equal(await page.locator('.bb-topology-arrow.is-route').count(), 2);
         assert.equal(await page.locator('.bb-topology-edge.is-line.is-route.is-reverse').count(), 1);

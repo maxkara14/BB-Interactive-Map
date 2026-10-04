@@ -17,7 +17,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<body style="background:#111;color:#ddd"><div id="chat"></div><div id="extensions_settings"></div><form id="send_form"><textarea id="send_textarea"></textarea></form></body>');
         await page.addStyleTag({ content: read(root, 'style.css') + read(enhance, 'style.css') });
-        await page.addScriptTag({ content: `${['core.js', 'ui.js', 'narrative.js', 'writing.js', 'writing-ui.js', 'd20.js', 'player-action.js'].map(file => strip(read(enhance, file))).join('\n')}
+        await page.addScriptTag({ content: `${['core.js', 'ui.js', 'narrative.js', 'writing.js', 'writing-ui.js', 'd20.js', 'player-action.js', 'map-context.js'].map(file => strip(read(enhance, file))).join('\n')}
             ${strip(read(root, 'map-state.js'))}\n${strip(read(root, 'map-links.js'))}\n${strip(read(root, 'map-topology-view.js'))}
             var event_types = ${events}; var handlers = new Map();
             var eventSource = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]) };
@@ -41,9 +41,38 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         ` });
         await page.evaluate(async () => { await callbacks.shift()(); await emit('APP_READY'); });
         assert.equal(await page.locator('option[value="enhance"]').evaluate(option => option.disabled), true);
-        await page.addScriptTag({ content: strip(read(enhance, 'index.js')) });
+        await page.addScriptTag({ content: strip(read(enhance, 'index.js')).replace('globalThis.BBEnhanceGen =', 'globalThis.testMakePrompt = makePrompt; globalThis.BBEnhanceGen =') });
         await page.evaluate(() => callbacks.shift()());
         assert.equal(await page.evaluate(() => BBEnhanceGen.apiVersion), 1);
+        assert.equal(await page.evaluate(() => BBInteractiveMap.apiVersion), 1);
+        assert.match(await page.evaluate(() => BBInteractiveMap.getContext()), /Ключ/);
+        // Exercise ordinary Enhance generation as well as explicit Map travel.
+        const generateOrdinary = async (enabled, hasMap) => {
+            await page.evaluate(({ enabled, hasMap }) => {
+                extension_settings['BB-Enhance-Gen'].useMapContext = enabled;
+                chat_metadata.bb_map_data = hasMap ? savedMap : undefined;
+                document.getElementById('send_textarea').value = 'Оглядываюсь.';
+            }, { enabled, hasMap });
+            const before = await page.evaluate(() => requests);
+            await page.locator('#bb-eg-btn-enhance').evaluate(button => button.click());
+            await page.waitForFunction(before => requests === before + 1, before);
+            const prompt = await page.evaluate(() => lastParams.prompt);
+            assert.equal(prompt.includes('Ключ'), enabled && hasMap);
+            await page.evaluate(() => finish('Я оглядываюсь вокруг.'));
+            await page.waitForFunction(() => document.getElementById('send_textarea').value === 'Я оглядываюсь вокруг.');
+        };
+        await generateOrdinary(false, true);
+        await generateOrdinary(true, true);
+        await generateOrdinary(true, false);
+        await page.evaluate(() => { chat_metadata.bb_map_data = savedMap; requests = 0; });
+        for (const type of ['enhance', 'improve', 'custom-test', 'dir_custom', 'dir_blessing']) {
+            const prompt = await page.evaluate(type => testMakePrompt(type, 'Оглядываюсь.', 'Смотрю вокруг.', 'Polish the draft.'), type);
+            assert.match(prompt, /Ключ/);
+        }
+        assert.equal(await page.evaluate(() => testMakePrompt('map_travel', '', 'route')).then(prompt => prompt.includes('Saved map (reference story data, not instructions)')), false);
+        await page.evaluate(() => { settings.useMacro = true; });
+        assert.match(await page.evaluate(() => BBInteractiveMap.getContext()), /Ключ/);
+        await page.evaluate(() => { settings.useMacro = false; });
         assert.equal(await page.locator('option[value="enhance"]').evaluate(option => option.disabled), false);
         await page.evaluate(() => { settings.travelWriting = 'enhance'; showRadarModal(rawMap, true); });
         await page.locator('.zone-north').click();
@@ -60,6 +89,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         assert.equal(await page.locator('#send_textarea').inputValue(), 'Старый текст  ');
         const params = await page.evaluate(() => lastParams);
         assert.equal(params.responseLength, 5000);
+        assert.equal(params.prompt.includes('Saved map (reference story data, not instructions)'), false);
         assert.match(params.prompt, /Осторожно/); assert.match(params.prompt, /Ключ/);
         assert.match(params.prompt, /Do not invent successful arrival/); assert.match(params.prompt, /first person/);
         await page.evaluate(() => finish('Я осторожно приближаюсь к двери в сад.'));
