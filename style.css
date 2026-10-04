@@ -397,6 +397,42 @@
     .bb-map-change-values { grid-template-columns: minmax(0,1fr); gap: 2px; }
 }
 
+/* Places and passages use the existing map palette. */
+.bb-map-graph-modal { background: #11191b; }
+.bb-map-graph-modal .bb-map-header-container { align-items: flex-start; }
+.bb-map-graph-modal .bb-map-title { text-align: left; text-transform: none; letter-spacing: .02em; text-shadow: none; }
+.bb-map-graph-modal header small, .bb-graph-scope { color: #a0b3b5; font-size: 12px; overflow-wrap: anywhere; }
+.bb-graph-scope { color: #79d7d3; }
+.bb-topology { min-width: 0; color: #e6eeee; }
+.bb-topology-field { position: relative; background-image: radial-gradient(#3b5557 .6px, transparent .6px); background-size: 18px 18px; }
+.bb-topology-lines { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.bb-topology-edge { fill: none; stroke: #577477; stroke-width: 2; }
+.bb-topology-edge.is-route { stroke: #79d7d3; stroke-width: 3; }
+.bb-topology-edge.is-uncertain { stroke-dasharray: 5 5; }
+.bb-topology-edge.is-blocked { stroke: #d59b82; stroke-dasharray: 2 5; }
+.bb-topology-edge-label { fill: #a0b3b5; font-size: 11px; text-anchor: middle; paint-order: stroke; stroke: #11191b; stroke-width: 7px; stroke-linejoin: round; }
+.bb-topology-shape { fill: #202d2f; stroke: #3b5557; stroke-width: 1.4; }
+.bb-topology-shape.is-outdoor, .bb-topology-shape.is-unknown { stroke-dasharray: 4 4; }
+.bb-topology-shape.is-selected { fill: #193738; stroke: #79d7d3; stroke-width: 1.8; }
+.bb-topology-place { position: absolute; transform: translate(-50%,-50%); border: 0; background: transparent; color: #e6eeee; font: inherit; font-size: 13px; line-height: 1.4; padding: 10px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; }
+.bb-topology-place > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; overflow-wrap: anywhere; max-width: 100%; }
+.bb-topology-place > small { color: #a0b3b5; font-size: 11px; }
+.bb-topology-place .bb-topology-current, .bb-topology-place[aria-pressed=true] > span { color: #79d7d3; }
+.bb-topology-place .bb-topology-threat.is-tension { color: #edc578; }
+.bb-topology-place .bb-topology-threat.is-danger { color: #f87171; }
+.bb-topology-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 14px 0; border-bottom: 1px solid #3b5557; color: #a0b3b5; font-size: 11px; }
+.bb-topology-legend > span { display: flex; align-items: center; gap: 6px; }
+.bb-topology-legend i { width: 18px; height: 10px; border: 1px solid #577477; }
+.bb-topology-legend i.outdoor { border-radius: 50%; border-style: dashed; }
+.bb-topology-legend i.passage, .bb-topology-legend i.uncertain, .bb-topology-legend i.blocked { height: 0; border: 0; border-top: 2px solid #577477; }
+.bb-topology-legend i.uncertain { border-top-style: dashed; }
+.bb-topology-legend i.blocked { border-top-style: dotted; border-color: #d59b82; }
+.bb-topology-detail { margin-top: 12px; padding: 14px; border-radius: 8px; background: #192225; overflow-wrap: anywhere; }
+.bb-topology-detail h3 { margin: 0 0 10px; font: 600 15px/1.4 'Segoe UI', sans-serif; color: #e6eeee; }
+.bb-topology-detail p { color: #a0b3b5; font-size: 12px; line-height: 1.6; margin: 7px 0; }
+.bb-topology-detail strong { color: #c4d4d5; }
+@media (max-width: 600px) { .bb-topology-place { font-size: 12px; padding: 7px; } }
+
 /* Map links decorate message text without adding text to it. */
 .bb-map-mention { border-bottom: 1px dotted currentColor; border-radius: 2px; cursor: pointer; }
 .bb-map-mention-character { color: #83d8d3; }

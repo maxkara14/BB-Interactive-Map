@@ -4,6 +4,7 @@ import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, s
 import { extension_settings } from '../../../extensions.js';
 import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
+import { createMapTopologyView } from './map-topology-view.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
@@ -44,6 +45,12 @@ let autoCandidateBase = null;
 let autoStatus = 'idle';
 let chatMapLinks = null;
 let mapTravelController = null;
+let mapTopologyView = null;
+
+function removeMapOverlay() {
+    mapTopologyView?.destroy(); mapTopologyView = null;
+    document.getElementById('bb-map-overlay')?.remove();
+}
 
 function getEnhanceActionAPI() {
     const api = globalThis.BBEnhanceGen;
@@ -226,7 +233,9 @@ function getMapContextForCurrentChat() {
     const memory = saved?.raw?.unlocated_objects?.some(item => item.item_state !== 'held')
         ? buildMapContextString(activeMapObjects(saved.raw)) : saved?.context || '';
     if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
-    return `${memory}${buildMapEffectsContext(saved?.raw, SillyTavern.getContext().name1)}\n[Game map: The center zone is the player's last known position. Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
+    const positionRule = saved?.raw?.layout === 'graph' ? 'Use the explicit player position and confirmed passage directions. Unknown connectivity does not establish a blocked path.'
+        : "The center zone is the player's last known position.";
+    return `${memory}${buildMapEffectsContext(saved?.raw, SillyTavern.getContext().name1)}\n[Game map: ${positionRule} Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
 }
 
 // === ИЗМЕНЕНО: Логика инъекции теперь учитывает useMacro ===
@@ -255,6 +264,8 @@ function mapFieldLabel(key) {
         source: ['Источник эффекта', 'Effect source'], expires_when: ['Условие окончания', 'End condition'],
         scope: ['Область действия', 'Scope'], target: ['К чему относится', 'Target'],
         status: ['Статус', 'Status'], evidence: ['Основание в истории', 'Narrative evidence'],
+        kind: ['Тип', 'Type'], uncertain: ['Не подтверждено', 'Unconfirmed'], direction: ['Направление', 'Direction'],
+        player_place_id: ['Положение игрока', 'Player position'], from: ['Откуда', 'From'], to: ['Куда', 'To'],
     };
     return tr(...labels[key]);
 }
@@ -313,23 +324,34 @@ function mapChangesHtml(previous, next) {
     const changes = getMapChanges(previous, next);
     const actions = { added: ['Добавлено', 'Added'], removed: ['Убрано с карты', 'Removed from map'],
         moved: ['Перемещение', 'Moved'], changed: ['Изменено', 'Changed'] };
-    const types = { scene: ['Сцена', 'Scene'], zone: ['Зона', 'Zone'], character: ['Персонаж', 'Character'], object: ['Предмет', 'Object'] };
+    const types = { scene: ['Сцена', 'Scene'], zone: ['Зона', 'Zone'], character: ['Персонаж', 'Character'], object: ['Предмет', 'Object'], connection: ['Проход', 'Passage'] };
     const zoneLabel = (raw, position) => {
-        const zone = raw?.zones?.find(zone => zone.position === position);
+        const zone = raw?.zones?.find(zone => (zone.position ?? zone.id) === position);
         return [zone?.name, mapPositionLabel(position)].filter(Boolean).join(' · ');
     };
     const locations = (raw, positions) => (Array.isArray(positions) ? positions : [positions])
         .filter(Boolean).map(position => zoneLabel(raw, position)).join('; ') || '—';
+    const valueLabel = (key, value, raw) => {
+        if (['player_place_id', 'from', 'to'].includes(key)) return zoneLabel(raw, value) || '—';
+        if (key === 'threat_level') return mapThreatLabel(value);
+        if (key === 'item_state') return mapItemStateLabel(value);
+        const labels = { room: ['Помещение', 'Room'], outdoor: ['Открытое место', 'Outdoors'], passage: ['Проход', 'Passage'],
+            area: ['Участок', 'Area'], unknown: ['Неизвестно', 'Unknown'], door: ['Дверь', 'Door'], path: ['Тропинка', 'Path'],
+            stairs: ['Ступени', 'Stairs'], opening: ['Проём', 'Opening'], both: ['В обе стороны', 'Both directions'], forward: ['В одну сторону', 'One direction'],
+            confirmed: ['Подтверждён', 'Confirmed'], uncertain: ['Не подтверждён', 'Unconfirmed'], blocked: ['Заблокирован', 'Blocked'],
+            scene: ['Текущая сцена', 'Current scene'], surroundings: ['Окрестности', 'Surroundings'], true: ['Да', 'Yes'], false: ['Нет', 'No'] };
+        return ['kind', 'direction', 'status', 'scope', 'uncertain'].includes(key) && labels[value] ? tr(...labels[value]) : value || '—';
+    };
     return `<details class="bb-map-review" open>
         <summary>${tr('Изменения карты', 'Map changes')} <span>${changes.length}</span></summary>
         <p>${tr('Сравнение с сохранённой картой. Удаление с карты не означает, что объект исчез из истории.',
             'Compared with the saved map. Removal from the map does not mean an entity disappeared from the story.')}</p>
         ${changes.length ? `<ul>${changes.map(change => `<li class="bb-map-change bb-map-change-${change.action}">
             <div><span class="bb-map-change-action">${tr(...actions[change.action])}</span> ${tr(...types[change.type])} · <strong>${escapeHtml(change.name)}</strong></div>
-            ${change.position ? `<small>${escapeHtml(mapPositionLabel(change.position))}</small>` : ''}
+            ${change.position ? `<small>${escapeHtml(zoneLabel(next, change.position) || zoneLabel(previous, change.position))}</small>` : ''}
             ${change.from || change.to ? `<div class="bb-map-change-values"><span>${escapeHtml(locations(previous, change.from))}</span><b>→</b><span>${escapeHtml(locations(next, change.to))}</span></div>` : ''}
             ${change.ambiguous ? `<p class="bb-map-change-warning">${tr('Имя повторяется. Нельзя однозначно определить, какая запись изменилась.', 'Repeated name. The changed entry cannot be identified unambiguously.')}</p>` : ''}
-            ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.before) : field.key === 'item_state' ? mapItemStateLabel(field.before) : field.before || '—')}</span><b>→</b><span>${escapeHtml(field.key === 'threat_level' ? mapThreatLabel(field.after) : field.key === 'item_state' ? mapItemStateLabel(field.after) : field.after || '—')}</span></div></div>`).join('')}
+            ${change.fields.map(field => `<div class="bb-map-change-field"><small>${mapFieldLabel(field.key)}</small><div class="bb-map-change-values"><span>${escapeHtml(valueLabel(field.key, field.before, previous))}</span><b>→</b><span>${escapeHtml(valueLabel(field.key, field.after, next))}</span></div></div>`).join('')}
         </li>`).join('')}</ul>` : `<p>${tr('Изменений нет.', 'No changes.')}</p>`}
         ${getMapMode(chat_metadata) === 'game' && requiresObjectReview(previous, next, SillyTavern.getContext().name1) ? `<p class="bb-map-change-warning">${tr('Положение некоторых предметов неоднозначно. Проверьте изменения перед сохранением; автосохранение приостановлено.', 'Some object whereabouts are uncertain. Review before saving; automatic saving is paused.')}</p>` : ''}
         ${hasLegacyObjectMemory(previous) ? `<p class="bb-map-change-warning">${tr('Очистка старой памяти: неактуальные объекты перестанут отслеживаться. Предыдущая карта останется доступна для отката.', 'Legacy memory cleanup: outdated objects will stop being tracked. The previous map remains available for rollback.')}</p>` : ''}
@@ -337,6 +359,8 @@ function mapChangesHtml(previous, next) {
 }
 
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
+    mapTopologyView?.destroy(); mapTopologyView = null;
+    if (data.layout === 'graph') return showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap);
     mapTravelController?.abort();
     const gameMode = isSavedMap && getMapMode(chat_metadata) === 'game';
     const old = document.getElementById('bb-map-overlay');
@@ -647,9 +671,52 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     };
 }
 
+function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
+    mapTravelController?.abort();
+    removeMapOverlay();
+    const focusBefore = document.activeElement, mode = getMapMode(chat_metadata);
+    const overlay = document.createElement('div'); overlay.id = 'bb-map-overlay'; overlay.className = 'bb-map-overlay';
+    overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true'); overlay.setAttribute('aria-label', data.schematic_name);
+    overlay.innerHTML = `<div class="bb-map-modal bb-map-graph-modal">
+        <header class="bb-map-header-container"><div class="bb-map-title">${escapeHtml(data.schematic_name)}</div>
+        <div class="bb-graph-scope">${data.scope === 'scene' ? tr('Текущая сцена', 'Current scene') : tr('Окрестности', 'Surroundings')}</div>
+        <small>${tr('Вы здесь:', 'You are here:')} ${escapeHtml(data.zones.find(zone => zone.id === data.player_place_id)?.name || tr('Положение неизвестно', 'Position unknown'))}</small></header>
+        <div class="bb-graph-content"></div>
+        ${mode === 'game' ? mapObjectsHtml(data, isSavedMap) + mapEffectsHtml(data, isSavedMap, expectedMap?.raw) : ''}
+        ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
+        <div class="bb-map-controls">${!isSavedMap ? `<button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn">${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>` : ''}
+        <button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
+    mapTopologyView = createMapTopologyView(data, { language: currentLanguage() });
+    overlay.querySelector('.bb-graph-content').append(mapTopologyView.element);
+    const close = () => {
+        mapTopologyView?.destroy(); mapTopologyView = null; overlay.remove();
+        if (focusBefore?.isConnected) focusBefore.focus({ preventScroll: true });
+    };
+    overlay.querySelector('#bb-map-back-btn').onclick = close;
+    overlay.addEventListener('keydown', event => {
+        if (event.key === 'Escape') { event.preventDefault(); close(); }
+        if (event.key === 'Tab') {
+            const controls = [...overlay.querySelectorAll('button:not(:disabled)')], first = controls[0], last = controls.at(-1);
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+        }
+    });
+    if (!isSavedMap) overlay.querySelector('#bb-map-save-btn').onclick = () => {
+        if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap || getMapMode(chat_metadata) !== mode) {
+            toastr.warning(tr('Чат, режим или карта изменились. Откройте карту заново.', 'The chat, mode, or map changed. Reopen the map.'), 'BB Map'); return;
+        }
+        chat_metadata.bb_map_data = createSavedMap(data, expectedMap);
+        saveChatDebounced(); autoCandidate = null; autoCandidateChat = null; autoCandidateBase = null; autoStatus = 'idle';
+        injectCurrentMapContext(); renderMapWidget(); setupExtensionSettings(true);
+        showRadarModal(data, true, chatForMap, chat_metadata.bb_map_data);
+    };
+    document.body.append(overlay); mapTopologyView.refresh();
+    requestAnimationFrame(() => { if (overlay.isConnected) { overlay.style.opacity = '1'; overlay.querySelector('.bb-topology-place')?.focus({ preventScroll: true }); } });
+}
+
 function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     mapTravelController?.abort();
-    document.getElementById('bb-map-overlay')?.remove();
+    removeMapOverlay();
     const overlay = document.createElement('div');
     overlay.id = 'bb-map-overlay';
     overlay.className = 'bb-map-overlay';
@@ -1178,7 +1245,7 @@ function setupExtensionSettings(rebuild = false) {
             mapTravelController?.abort();
             saveChatDebounced();
             resetAutoUpdate();
-            document.getElementById('bb-map-overlay')?.remove();
+            removeMapOverlay();
             injectCurrentMapContext();
             renderMapWidget();
             setupExtensionSettings(true);
@@ -1188,7 +1255,7 @@ function setupExtensionSettings(rebuild = false) {
         [['simple', tr('Простой текст', 'Simple text')], ['enhance', tr('Через Enhance Gen', 'Through Enhance Gen')]], value => {
             mapTravelController?.abort();
             settings.travelWriting = value; saveSettingsDebounced();
-            document.getElementById('bb-map-overlay')?.remove();
+            removeMapOverlay();
         });
     writingSelect.querySelector('option[value="enhance"]').disabled = !getEnhanceActionAPI();
     if (!getEnhanceActionAPI()) note(mapTools, tr('Генерация переходов доступна с Enhance Gen, поддерживающим API действий карты.', 'Generated travel requires Enhance Gen with the map action API.'));
@@ -1556,7 +1623,7 @@ jQuery(async () => {
         eventSource.on(event_types.CHAT_CHANGED, () => {
             mapTravelController?.abort();
             resetAutoUpdate();
-            document.getElementById('bb-map-overlay')?.remove();
+            removeMapOverlay();
             injectCurrentMapContext();
             renderMapWidget();
             setupExtensionSettings(true);

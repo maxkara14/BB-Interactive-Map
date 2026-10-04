@@ -62,7 +62,7 @@ function objectState(source) {
 
 export function getMapObjects(raw) {
     return [...(raw?.zones || []).flatMap(zone => (zone.poi || []).map(value => ({
-        ...(typeof value === 'object' ? value : { name: value }), zone: zone.name, position: zone.position,
+        ...(typeof value === 'object' ? value : { name: value }), zone: zone.name, position: zone.position ?? zone.id,
     }))), ...(raw?.unlocated_objects || []).map(value => ({ ...value, zone: '', position: '' }))];
 }
 
@@ -462,10 +462,11 @@ export function getMapChanges(previous, next) {
     const fieldsChanged = (before, after, keys) => keys
         .filter(key => optionalText(before?.[key]) !== optionalText(after?.[key]))
         .map(key => ({ key, before: optionalText(before?.[key]), after: optionalText(after?.[key]) }));
-    const sceneFields = fieldsChanged(previous, next, ['schematic_name', 'atmosphere']);
+    const graph = previous?.layout === 'graph' || next?.layout === 'graph';
+    const sceneFields = fieldsChanged(previous, next, ['schematic_name', 'atmosphere', ...(graph ? ['scope', 'player_place_id'] : [])]);
     if (previous && sceneFields.length) changes.push({ type: 'scene', action: 'changed', name: next.schematic_name, fields: sceneFields });
-    const oldZones = new Map((previous?.zones || []).map(zone => [zone.position, zone]));
-    const newZones = new Map((next?.zones || []).map(zone => [zone.position, zone]));
+    const oldZones = new Map((previous?.zones || []).map(zone => [zone.position ?? zone.id, zone]));
+    const newZones = new Map((next?.zones || []).map(zone => [zone.position ?? zone.id, zone]));
     for (const position of new Set([...oldZones.keys(), ...newZones.keys()])) {
         const before = oldZones.get(position);
         const after = newZones.get(position);
@@ -473,9 +474,16 @@ export function getMapChanges(previous, next) {
             changes.push({ type: 'zone', action: before ? 'removed' : 'added', name: (after || before).name, position, fields: [] });
             continue;
         }
-        const fields = fieldsChanged({ ...before, threat_level: before.threat_level || 'safe' },
-            { ...after, threat_level: after.threat_level || 'safe' }, ['name', 'summary', 'threat_level', 'threat_reason']);
+        const fields = fieldsChanged({ ...before, threat_level: before.threat_level || 'safe', uncertain: String(before.uncertain ?? false) },
+            { ...after, threat_level: after.threat_level || 'safe', uncertain: String(after.uncertain ?? false) }, ['name', 'summary', 'threat_level', 'threat_reason', ...(graph ? ['kind', 'uncertain'] : [])]);
         if (fields.length) changes.push({ type: 'zone', action: 'changed', name: after.name, position, fields });
+    }
+    const oldConnections = new Map((previous?.connections || []).map(edge => [edge.id, edge]));
+    const newConnections = new Map((next?.connections || []).map(edge => [edge.id, edge]));
+    for (const id of new Set([...oldConnections.keys(), ...newConnections.keys()])) {
+        const before = oldConnections.get(id), after = newConnections.get(id);
+        const fields = fieldsChanged(before, after, ['name', 'from', 'to', 'kind', 'status', 'direction', 'evidence']);
+        if (fields.length) changes.push({ type: 'connection', action: !before ? 'added' : !after ? 'removed' : 'changed', name: (after || before).name, fields });
     }
     const entries = (raw, type) => {
         const groups = new Map();
@@ -484,7 +492,7 @@ export function getMapChanges(previous, next) {
                 const name = poiName(value);
                 if (!name) continue;
                 const key = entityKey(type, name);
-                const entry = { name, description: optionalText(value?.description), position: zone.position };
+                const entry = { name, description: optionalText(value?.description), position: zone.position ?? zone.id ?? '' };
                 if (type === 'character') {
                     for (const field of ['mood', 'attitude', 'thought']) entry[field] = optionalText(value?.[field]);
                 }

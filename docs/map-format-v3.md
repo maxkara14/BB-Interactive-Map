@@ -1,8 +1,9 @@
 # Local topology format (v3)
 
-This is the data foundation for the approved places-and-passages map. The live scan,
-editor, widget and travel controls still use the v2 grid until the topology renderer
-and integration are ready. Extension release versions are separate from this format.
+This is the data foundation for the approved places-and-passages map. The full-map
+renderer and change preview can display validated v3 data. Live generation, editing,
+the widget and travel controls still use the v2 grid until their integration is ready.
+Extension release versions are separate from this format.
 
 ## Saved envelope
 
@@ -103,6 +104,14 @@ them without converting either snapshot.
 ## Next integration gates
 
 Before enabling graph scans in the live UI, adapt topology change review and
-uncertainty gates, the renderer, editor, widget, mention links, travel context and
+uncertainty gates, the editor, widget, mention links, travel context and
 Enhance bridge. Layout is derived by the extension; the model supplies semantic
 places and established links. Old grids stay readable throughout this work.
+
+`createMapTopologyView` renders the graph using native place buttons, typed outlines,
+direction/status marks and a selection card. Routes highlight only confirmed edges;
+selection does not change saved data. Layout responds to container width, and passage
+lines detour around intervening places. Names rotate parallel to a visible segment;
+short or colliding labels remain available in the selected place's passage details.
+Full-map observers are disconnected when the window closes or the chat/mode changes.
+The v3 preview compares places, passage facts, player position and entity movement.
