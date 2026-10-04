@@ -65,6 +65,12 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.match(await page.locator('#send_textarea').inputValue(), /Мой текст\n\nЯ направляюсь по маршруту: «Зал» → «Галерея» → «Сад»/);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.player_place_id), currentPlace);
         assert.equal(await page.locator('#bb-map-overlay').count(), 0);
+        assert.doesNotMatch(await page.locator('.bb-map-widget').innerText(), /Подтвержд|Confirmed/);
+        assert.equal(await page.locator('.bb-map-widget-arrow').count(), 2);
+        if (process.argv[3]) {
+            fs.mkdirSync(process.argv[3], { recursive: true });
+            await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-one.png') });
+        }
         await page.locator('.bb-map-widget-place[data-place-id]').click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Галерея/);
         await page.locator('#bb-map-edit-btn').click();
@@ -136,6 +142,56 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.getByRole('button', { name: 'PREVIEW EDITS', exact: true }).click();
         assert.match(await page.locator('.bb-map-edit-error').innerText(), /chat or saved map changed/);
         assert.equal(await page.evaluate(() => messages[0].mes), 'Я стою в зале.');
+        await page.evaluate(() => {
+            removeMapOverlay(); settings.uiLanguage = 'ru';
+            const hub = { layout: 'graph', scope: 'scene', schematic_name: 'Карантинный двор — Каменный умывальник', player_place_id: 'center',
+                zones: [{ id: 'center', name: 'Каменный умывальник', kind: 'room' },
+                    { id: 'a', name: 'Забрызганный гравий', kind: 'outdoor' }, { id: 'b', name: 'Карниз веранды', kind: 'passage' },
+                    { id: 'c', name: 'Тренировочный зал', kind: 'room' }, { id: 'd', name: 'Бамбуковая роща', kind: 'outdoor' }],
+                connections: ['a','b','c','d'].map((id, i) => ({ from: i === 1 ? id : 'center', to: i === 1 ? 'center' : id,
+                    name: 'Проход ' + id, kind: 'path', direction: i ? 'forward' : 'both', status: i === 2 ? 'uncertain' : i === 3 ? 'blocked' : 'confirmed', evidence: 'Fixture' })) };
+            chat_metadata.bb_map_data = createSavedMap(normalizeGraphMapData(hub)); renderMapWidget();
+        });
+        for (const width of [1440, 390, 320]) {
+            await page.setViewportSize({ width, height: 1000 });
+            const geometry = await page.locator('.bb-map-widget-places').evaluate(field => {
+                const rect = field.getBoundingClientRect();
+                return { width: rect.width, height: rect.height, nodes: [...field.querySelectorAll('.bb-map-widget-place')].map(node => {
+                    const r = node.getBoundingClientRect(); return { x: r.x - rect.x, y: r.y - rect.y, width: r.width, height: r.height };
+                }) };
+            });
+            assert.equal(geometry.nodes.length, 5);
+            assert.ok(geometry.height < 230);
+            for (const node of geometry.nodes) {
+                assert.ok(node.x >= 0 && node.y >= 0 && node.x + node.width <= geometry.width + 1 && node.y + node.height <= geometry.height + 1);
+                assert.ok(node.width < 110 && node.height < 52);
+            }
+            assert.equal(await page.locator('.bb-map-widget-edge[data-connection-id]').count(), 4);
+            assert.equal(await page.locator('.bb-map-widget-arrow').count(), 4);
+            assert.equal(await page.locator('.bb-map-widget-arrow.is-blocked').count(), 0);
+            assert.doesNotMatch(await page.locator('.bb-map-widget').innerText(), /Подтвержд|Confirmed/);
+            if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-' + width + '.png') });
+        }
+        await page.evaluate(() => {
+            globalThis.miniHub = chat_metadata.bb_map_data;
+            const raw = structuredClone(miniHub.raw); raw.connections = raw.connections.slice(0,2);
+            chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
+        });
+        assert.equal(await page.locator('.bb-map-widget-place').count(), 3);
+        assert.equal(await page.locator('.bb-map-widget-arrow').count(), 3);
+        if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-two.png') });
+        await page.evaluate(() => { settings.uiLanguage = 'en'; renderMapWidget(); });
+        assert.match(await page.locator('.bb-map-widget-open').innerText(), /OPEN MAP/);
+        assert.doesNotMatch(await page.locator('.bb-map-widget').innerText(), /Confirmed/);
+        await page.evaluate(() => {
+            const raw = structuredClone(miniHub.raw); raw.player_place_id = null;
+            chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
+        });
+        assert.equal(await page.locator('.bb-map-widget-place').count(), 0);
+        assert.match(await page.locator('.bb-map-widget').innerText(), /Position unknown/);
+        await page.evaluate(() => { settings.uiLanguage = 'ru'; chat_metadata.bb_map_data = miniHub; renderMapWidget(); });
+        await page.locator('.bb-map-widget-place[data-place-id]').first().click();
+        assert.match(await page.locator('.bb-topology-detail').innerText(), /Забрызганный гравий/);
         assert.deepEqual(errors, []);
         console.log('Graph providers, scopes, editor places/passages, widget, route drafts, ambiguity/auto-save, unknown position, stale chat and responsive checks passed.');
     } finally { await browser.close(); }

@@ -1,5 +1,23 @@
 import { getMapRoute, poiName } from './map-state.js';
 
+// Compact schematic: current place and up to four directly connected places.
+export function layoutMiniMap(raw) {
+    const current = raw.zones.find(zone => zone.id === raw.player_place_id);
+    if (!current) return { nodes: [], edges: [], height: 0, extra: 0 };
+    const edges = raw.connections.filter(edge => edge.from === current.id || edge.to === current.id);
+    const ids = [...new Set(edges.map(edge => edge.from === current.id ? edge.to : edge.from))];
+    const visible = ids.slice(0, 4), count = visible.length;
+    const height = count > 2 ? 226 : count ? 142 : 62;
+    const nodes = [{ ...current, x: 128, y: count > 2 ? 113 : 29, width: 104, height: 48, band: 0 }];
+    visible.forEach((id, i) => {
+        const row = count > 2 && i < 2 ? 0 : 1;
+        const single = count === 1 || count === 3 && i === 2;
+        nodes.push({ ...raw.zones.find(zone => zone.id === id), x: single ? 128 : i % 2 ? 202 : 54,
+            y: count > 2 ? row ? 197 : 29 : 113, width: 100, height: 48, band: row });
+    });
+    return { nodes, edges: edges.filter(edge => visible.includes(edge.from === current.id ? edge.to : edge.from)), height, extra: ids.length - visible.length };
+}
+
 export function layoutMapPlaces(raw, width) {
     const columns = width < 500 ? 2 : 3;
     const gap = width < 500 ? 70 : 90;

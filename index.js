@@ -4,7 +4,7 @@ import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, s
 import { extension_settings } from '../../../extensions.js';
 import { normalizeGraphMapData, readMapState, getMapRoute, requiresTopologyReview, normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
-import { createMapTopologyView } from './map-topology-view.js';
+import { createMapTopologyView, layoutMiniMap, layoutMapPassage } from './map-topology-view.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
@@ -1539,14 +1539,34 @@ function setupExtensionSettings(rebuild = false) {
 }
 
 function graphWidgetHtml(raw) {
-    const current = raw.zones.find(zone => zone.id === raw.player_place_id);
-    const edges = raw.connections.filter(edge => edge.from === current?.id || edge.to === current?.id);
-    const neighbours = [...new Set(edges.map(edge => edge.from === current?.id ? edge.to : edge.from))];
-    return '<div class="bb-map-widget-places">' + (current ? '<span class="bb-map-widget-place is-current"><small>' + tr('Вы здесь', 'You are here') + '</small>' + escapeHtml(current.name) + '</span>'
-        : '<small>' + tr('Положение неизвестно', 'Position unknown') + '</small>')
-        + neighbours.slice(0,4).map(id => { const place = raw.zones.find(zone => zone.id === id), edge = edges.find(edge => edge.from === id || edge.to === id);
-            return '<button type="button" class="bb-map-widget-place is-' + place.kind + '" data-place-id="' + id + '"><small>' + escapeHtml(edge.name) + ' · ' + topologyValueLabel(edge.status) + '</small><span>' + escapeHtml(place.name) + '</span></button>';
-        }).join('') + (neighbours.length > 4 ? '<small>+' + (neighbours.length - 4) + ' ' + tr('на полной карте','on the full map') + '</small>' : '') + '</div>';
+    const layout = layoutMiniMap(raw);
+    if (!layout.nodes.length) return '<small>' + tr('Положение неизвестно', 'Position unknown') + '</small>';
+    const byId = new Map(layout.nodes.map(node => [node.id, node]));
+    const lines = layout.edges.map(edge => {
+        const points = layoutMapPassage(byId.get(edge.from), byId.get(edge.to), layout.nodes, 256);
+        const cls = 'bb-map-widget-edge is-' + edge.status;
+        let html = '<path class="' + cls + '" data-connection-id="' + edge.id + '" d="' + points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ') + '"/>';
+        const arrow = (tip, previous) => {
+            const length = Math.hypot(tip.x - previous.x, tip.y - previous.y);
+            const ux = (tip.x - previous.x) / length, uy = (tip.y - previous.y) / length;
+            return '<path class="' + cls + ' bb-map-widget-arrow" d="M' + (tip.x - ux * 7 - uy * 3) + ' ' + (tip.y - uy * 7 + ux * 3)
+                + ' L' + tip.x + ' ' + tip.y + ' L' + (tip.x - ux * 7 + uy * 3) + ' ' + (tip.y - uy * 7 - ux * 3) + '"/>';
+        };
+        if (edge.status !== 'blocked') {
+            html += arrow(points.at(-1), points.at(-2));
+            if (edge.direction === 'both') html += arrow(points[0], points[1]);
+        }
+        return html;
+    }).join('');
+    return '<div class="bb-map-widget-places" style="aspect-ratio:256/' + layout.height + '"><svg viewBox="0 0 256 ' + layout.height + '" aria-hidden="true">' + lines + '</svg>'
+        + layout.nodes.map(place => {
+            const current = place.id === raw.player_place_id;
+            const edge = layout.edges.find(edge => edge.from === place.id || edge.to === place.id);
+            const title = place.name + (current ? ' · ' + tr('Вы здесь', 'You are here') : edge ? ' · ' + edge.name + (edge.status === 'confirmed' ? '' : ' · ' + topologyValueLabel(edge.status)) : '');
+            const attrs = ' class="bb-map-widget-place is-' + place.kind + (current ? ' is-current' : '') + '" title="' + escapeHtml(title) + '" style="left:' + place.x / 256 * 100 + '%;top:' + place.y / layout.height * 100 + '%;width:' + place.width / 256 * 100 + '%;height:' + place.height / layout.height * 100 + '%"';
+            return current ? '<span' + attrs + '><span>' + escapeHtml(place.name) + '</span></span>'
+                : '<button type="button" data-place-id="' + place.id + '"' + attrs + '><span>' + escapeHtml(place.name) + '</span></button>';
+        }).join('') + '</div>' + (layout.extra ? '<small>+' + layout.extra + ' ' + tr('на полной карте', 'on the full map') + '</small>' : '');
 }
 
 function renderMapWidget() {
