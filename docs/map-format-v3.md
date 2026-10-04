@@ -111,8 +111,9 @@ supplies semantic places and established links.
 The editor supports place types, explicit player position, entities and passage
 endpoints/status/direction/evidence. Dangling endpoints are rejected rather than
 reassigned. Changes remain previews until saved. The widget shows the current
-place and up to four directly connected neighbors; mention cards select their
-place on the full map. Game travel follows confirmed connections. The panel warns
+place and up to four nearby places, including those reached through an intermediate
+place; mention cards select their place on the full map. Game travel follows
+confirmed connections. The panel warns
 about threats in intermediate places as well as the destination. Simple text
 includes intermediate places; Enhance receives the selected route and passage
 evidence through the existing mapContext API. Both leave player position
@@ -125,7 +126,21 @@ lines detour around intervening places. Names rotate parallel to a visible segme
 The longest free segment is preferred; another segment or side is used when labels
 collide. A long name falls back to the localized passage type; full names/evidence
 remain in the place details. The selection panel follows the approved compact
-prototype: name and condition, brief description, route and entity names. Full
-descriptions, moods, attitudes, thoughts and passage evidence expand under Details.
+prototype: name and condition, brief description, and tabs for characters, objects
+and passages. Entries expand to show descriptions, moods, attitudes, thoughts
+and passage evidence.
 Full-map observers are disconnected when the window closes or the chat/mode changes.
 The v3 preview compares places, passage facts, player position and entity movement.
+
+## Read-only context API
+
+`globalThis.BBInteractiveMap` exposes `apiVersion: 1` and synchronous `getContext()`.
+It resolves the saved map of the active chat on every call, returning a string
+or an empty string when no supported saved map is available. Game effects and
+instructions are included only when the active chat uses Game mode. It does not
+scan, update, save or cache chat data. Its result does not depend on the manual
+macro setting; `{{bb_map}}` itself remains empty when manual placement is off.
+
+Consumers should check API compatibility and treat absent/empty context as
+optional. Enhance and VNE preview branches use independent, default-off context
+switches. Enhance travel receives explicit context from the map action instead.
