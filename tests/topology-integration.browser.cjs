@@ -280,8 +280,8 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             assert.equal(await page.locator('.bb-map-widget-arrow').count(), 3);
             assert.match(await page.locator('.bb-map-widget-places').innerText(), /Кухонный переход/);
             if (width <= 600) {
-                assert.equal(await page.locator('.bb-map-widget-launch').isVisible(), true);
-                assert.equal(await page.locator('.bb-map-widget-content').isVisible(), false);
+                assert.equal(await page.locator('.bb-map-widget-launch').isVisible(), false);
+                assert.equal(await page.locator('.bb-map-widget-content').isVisible(), true);
             } else await page.locator('.bb-map-widget-places').evaluate(field => {
                 const current = field.querySelector('.is-current'), labels = [...field.querySelectorAll('.bb-map-widget-place')];
                 for (const label of labels) if (label.scrollHeight > label.clientHeight + 1) throw Error('Mini label overflows');

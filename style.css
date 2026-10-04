@@ -608,10 +608,10 @@
 .bb-map-settings, .bb-map-settings-body, .bb-map-section-body { min-width: 0; max-width: 100%; }
 .bb-map-settings .menu_button { box-sizing: border-box; overflow-wrap: anywhere; }
 @media (max-width: 600px), (max-width: 900px) and (pointer: coarse) {
-    .bb-map-widget { width: 44px; background: transparent; border-color: transparent; box-shadow: none; }
-    .bb-map-widget-header { min-height: 42px; padding: 0; justify-content: center; }
-    .bb-map-widget-header > :not(.bb-map-widget-launch), .bb-map-widget-content { display: none; }
-    .bb-map-widget-launch { display: flex; }
+    .bb-map-widget.is-collapsed, .bb-map-widget.is-empty { width: 44px; background: transparent; border-color: transparent; box-shadow: none; }
+    .bb-map-widget.is-collapsed .bb-map-widget-header, .bb-map-widget.is-empty .bb-map-widget-header { min-height: 42px; padding: 0; justify-content: center; }
+    .bb-map-widget.is-collapsed .bb-map-widget-header > :not(.bb-map-widget-launch), .bb-map-widget.is-collapsed .bb-map-widget-content { display: none; }
+    .bb-map-widget.is-collapsed .bb-map-widget-launch { display: flex; }
     .bb-map-modal { width: 100%; max-width: 100%; max-height: 100%; padding: 12px; }
     .bb-map-modal .bb-map-controls {
         display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;

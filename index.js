@@ -1644,7 +1644,7 @@ function renderMapWidget() {
         : level === 'safe' ? tr('Безопасно', 'Safe') : tr('Положение неизвестно', 'Position unknown');
     const widget = document.createElement('section');
     widget.id = 'bb-map-widget';
-    widget.className = `bb-map-widget bb-map-widget-${level}${hasMap ? '' : ' is-empty'}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;
+    widget.className = `bb-map-widget bb-map-widget-${level}${hasMap ? '' : ' is-empty'}${settings.widgetCollapsed ? ' is-collapsed' : ''}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;
     const previous = widgetMapSnapshot && isSameChat(widgetMapSnapshot.chat, widgetChat) ? widgetMapSnapshot.raw : raw;
     const visualChanges = getMapVisualChanges(raw, previous);
     widgetMapSnapshot = { chat: { chatId: widgetChat.chatId, characterId: widgetChat.characterId, groupId: widgetChat.groupId, chatMetadata: widgetChat.chatMetadata }, raw: structuredClone(raw) };
@@ -1731,7 +1731,14 @@ function renderMapWidget() {
     };
     widget.querySelector('.bb-map-widget-open').onclick = () => openMap();
     let wasDragged = false;
-    widget.querySelector('.bb-map-widget-launch').onclick = () => { if (!wasDragged) openMap(true); wasDragged = false; };
+    widget.querySelector('.bb-map-widget-launch').onclick = () => {
+        if (!wasDragged) {
+            if (hasMap && !updateReady && window.matchMedia('(max-width: 600px), (max-width: 900px) and (pointer: coarse)').matches) {
+                settings.widgetCollapsed = false; saveSettingsDebounced(); renderMapWidget();
+            } else openMap(true);
+        }
+        wasDragged = false;
+    };
     for (const button of widget.querySelectorAll('[data-place-id]')) button.onclick = () => {
         const current = getMapDataForCurrentChat();
         if (current?.raw) { showRadarModal(current.raw, true); mapTopologyView?.select(button.dataset.placeId); }

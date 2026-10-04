@@ -45,4 +45,4 @@ Reload the page. Open **Extensions settings → BB Interactive Map → Current c
 
 ### Opening the map on a phone
 
-On phones, a square button opens the full map instead of expanding the mini-map. When no saved map exists, it offers a manual scan followed by preview and save. The button can be dragged; disable it in extension settings. The dialog follows the visible viewport height and keeps its bottom actions accessible while scrolling.
+On phones, the collapsed widget appears as a square button. Tap it to expand the mini-map, then use its Open map button for the full map. When no saved map exists, it offers a manual scan followed by preview and save. The button can be dragged; disable it in extension settings. The dialog follows the visible viewport height and keeps its bottom actions accessible while scrolling.

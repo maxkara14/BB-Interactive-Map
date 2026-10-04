@@ -61,9 +61,16 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         await page.locator('#bb-map-back-btn').click();
         for (const [width, height] of [[390,640], [320,568], [740,360]]) {
             await page.setViewportSize({ width, height });
-            await page.evaluate(() => renderMapWidget());
+            await page.evaluate(() => { settings.widgetCollapsed = true; renderMapWidget(); });
             assert.equal(await page.locator('.bb-map-widget-content').isVisible(), false);
             await page.locator('.bb-map-widget-launch').click();
+            assert.equal(await page.locator('.bb-map-widget-content').isVisible(), true);
+            assert.equal(await page.locator('.bb-map-widget-places').isVisible(), true);
+            assert.equal(await page.locator('.bb-map-widget-launch').isVisible(), false);
+            await page.locator('.bb-map-widget-toggle:not(.bb-map-widget-launch)').click();
+            assert.equal(await page.locator('.bb-map-widget-content').isVisible(), false);
+            await page.locator('.bb-map-widget-launch').click();
+            await page.locator('.bb-map-widget-open').click();
             await page.waitForFunction(() => getComputedStyle(document.getElementById('bb-map-overlay')).opacity === '1');
             await page.locator('.bb-map-modal').evaluate(modal => { modal.scrollTop = modal.scrollHeight; });
             const close = await page.locator('#bb-map-back-btn').boundingBox();
@@ -73,7 +80,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             if (process.argv[3]) { fs.mkdirSync(process.argv[3], { recursive: true }); await page.screenshot({ path: path.join(process.argv[3], 'phone-map-' + width + '.png') }); }
             await page.locator('#bb-map-back-btn').click();
         }
-        await page.evaluate(() => { autoCandidate = raw; autoCandidateChat = context; autoCandidateBase = chat_metadata.bb_map_data; autoStatus = 'ready'; settings.autoUpdate = true; renderMapWidget(); });
+        await page.evaluate(() => { autoCandidate = raw; autoCandidateChat = context; autoCandidateBase = chat_metadata.bb_map_data; autoStatus = 'ready'; settings.autoUpdate = true; settings.widgetCollapsed = true; renderMapWidget(); });
         assert.equal(await page.locator('.bb-map-widget-launch.has-update').count(), 1);
         await page.locator('.bb-map-widget-launch').click();
         assert.equal(await page.locator('#bb-map-save-btn').count(), 1); // Phone still offers pending update review.
