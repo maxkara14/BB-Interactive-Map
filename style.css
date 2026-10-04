@@ -427,8 +427,8 @@
 .bb-topology-legend i.passage, .bb-topology-legend i.uncertain, .bb-topology-legend i.blocked { height: 0; border: 0; border-top: 2px solid #577477; }
 .bb-topology-legend i.uncertain { border-top-style: dashed; }
 .bb-topology-legend i.blocked { border-top-style: dotted; border-color: #d59b82; }
-.bb-topology-detail { margin-top: 12px; padding: 14px; border-radius: 8px; background: #192225; overflow-wrap: anywhere; }
-.bb-topology-detail h3 { margin: 0 0 10px; font: 600 15px/1.4 'Segoe UI', sans-serif; color: #e6eeee; }
+.bb-topology-detail { margin-top: 0; padding: 14px 16px; border-radius: 0 0 8px 8px; background: #192225; overflow-wrap: anywhere; }
+.bb-topology-detail h3 { margin: 0; font: 600 15px/1.4 'Segoe UI', sans-serif; color: #e6eeee; }
 .bb-topology-detail p { color: #a0b3b5; font-size: 12px; line-height: 1.6; margin: 7px 0; }
 .bb-topology-detail strong { color: #c4d4d5; }
 @media (max-width: 600px) { .bb-topology-place { font-size: 12px; padding: 7px; } }
@@ -491,3 +491,15 @@
 .bb-map-widget-place:hover { background: #223a3d; }
 
 .bb-map-widget-place[data-place-id]:only-of-type { grid-column: 1 / -1; }
+
+.bb-topology-detail-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.bb-topology-condition { color: #a0b3b5; font-size: 11px; flex-shrink: 0; }
+.bb-topology-condition.is-tension { color: #edc578; }
+.bb-topology-condition.is-danger { color: #f87171; }
+.bb-topology-detail .bb-topology-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.bb-topology-detail .bb-topology-route { color: #79d7d3; margin: 5px 0; }
+.bb-topology-contents { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 8px; }
+.bb-topology-contents p { margin: 0; }
+.bb-topology-more { margin-top: 10px; font-size: 12px; color: #a0b3b5; }
+.bb-topology-more > summary { cursor: pointer; width: fit-content; }
+.bb-topology-more > summary:focus-visible { outline: 2px solid #79d7d3; outline-offset: 3px; }

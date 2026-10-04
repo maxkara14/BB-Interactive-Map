@@ -48,3 +48,14 @@ test('a passage detours around an intervening place instead of drawing through i
     assert.ok(route[1].x > obstacle.x + obstacle.width / 2);
     assert.equal(route[1].x, route[2].x);
 });
+
+test('short passage labels have room between places on a narrow map', () => {
+    const raw = normalizeGraphMapData({ layout: 'graph', scope: 'scene', schematic_name: 'House', player_place_id: 'hall',
+        zones: [{ id: 'hall', name: 'Hall', kind: 'room' }, { id: 'garden', name: 'Garden', kind: 'outdoor' }],
+        connections: [{ from: 'hall', to: 'garden', name: 'Door', kind: 'door', status: 'confirmed', evidence: 'Open door.' }] });
+    for (const width of [270, 320, 390, 600]) {
+        const { nodes } = layoutMapPlaces(raw, width);
+        const [a, b] = layoutMapPassage(nodes[0], nodes[1], nodes, width);
+        assert.ok(Math.hypot(b.x - a.x, b.y - a.y) >= 70);
+    }
+});

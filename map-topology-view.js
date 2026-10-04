@@ -2,7 +2,7 @@ import { getMapRoute, poiName } from './map-state.js';
 
 export function layoutMapPlaces(raw, width) {
     const columns = width < 500 ? 2 : 3;
-    const gap = width < 500 ? 26 : 70;
+    const gap = width < 500 ? 70 : 90;
     const cell = (width - 24 - gap * (columns - 1)) / columns;
     const size = zone => {
         const w = Math.min(cell, zone.kind === 'passage' ? 198 : zone.kind === 'outdoor' ? 186 : 168);
@@ -10,7 +10,7 @@ export function layoutMapPlaces(raw, width) {
         const flags = Number(zone.id === raw.player_place_id) + Number(zone.threat_level !== 'safe') + Number(zone.uncertain);
         return { w, height: Math.max(zone.kind === 'passage' ? 78 : zone.kind === 'outdoor' ? 118 : 106, 42 + lines * 19 + flags * 19) };
     };
-    const pitch = Math.max(...raw.zones.map(zone => size(zone).height)) + 27;
+    const tallest = Math.max(...raw.zones.map(zone => size(zone).height));
     const root = raw.zones.find(zone => zone.id === raw.player_place_id) || raw.zones[0];
     const distances = new Map([[root.id, 0]]), queue = [root.id];
     for (let i = 0; i < queue.length; i++) {
@@ -21,6 +21,7 @@ export function layoutMapPlaces(raw, width) {
             distances.set(next, distances.get(id) + 1); queue.push(next);
         }
     }
+    const pitch = tallest + (raw.connections.some(edge => distances.get(edge.from) === distances.get(edge.to)) ? 70 : 27);
     const last = Math.max(...distances.values()) + 1;
     const groups = new Map();
     for (const zone of raw.zones) {
@@ -101,6 +102,7 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
     let selected = raw.player_place_id || raw.zones[0].id;
     const kinds = { room: ['Помещение', 'Room'], outdoor: ['Открытое место', 'Outdoors'], passage: ['Проход', 'Passage'],
         area: ['Участок', 'Area'], unknown: ['Тип неизвестен', 'Unknown type'] };
+    const passageKinds = { door: ['Дверь', 'Door'], path: ['Тропинка', 'Path'], stairs: ['Ступени', 'Stairs'], opening: ['Проём', 'Opening'], passage: ['Проход', 'Passage'], unknown: ['Связь', 'Link'] };
     const states = { confirmed: ['Подтверждён', 'Confirmed'], uncertain: ['Не подтверждён', 'Unconfirmed'], blocked: ['Заблокирован', 'Blocked'] };
     const make = (tag, attrs, text) => {
         const node = document.createElementNS(svg.namespaceURI, tag);
@@ -108,20 +110,21 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
         if (text !== undefined) node.textContent = text;
         svg.append(node); return node;
     };
-    const paragraph = (label, value) => {
+    const paragraph = (label, value, target = detail, className = '') => {
         if (!value) return;
-        const p = document.createElement('p');
+        const p = document.createElement('p'); p.className = className;
         if (label) { const b = document.createElement('strong'); b.textContent = label + ': '; p.append(b); }
-        p.append(document.createTextNode(value)); detail.append(p);
+        p.append(document.createTextNode(value)); target.append(p);
     };
     function draw() {
         if (!field.isConnected || !field.clientWidth) return;
         const focusedId = places.querySelector(':focus')?.dataset.placeId;
+        const focusedMore = detail.querySelector('summary') === document.activeElement;
         const width = field.clientWidth, layout = layoutMapPlaces(raw, width);
         field.style.height = `${layout.height}px`; svg.setAttribute('viewBox', `0 0 ${width} ${layout.height}`);
         svg.replaceChildren(); places.replaceChildren();
         const byId = new Map(layout.nodes.map(node => [node.id, node]));
-        const route = getMapRoute(raw, selected);
+        const route = getMapRoute(raw, selected), labelGeometry = new Map();
         for (const edge of raw.connections) {
             const p = byId.get(edge.from), q = byId.get(edge.to);
             const dx = q.x - p.x, dy = q.y - p.y, length = Math.hypot(dx, dy);
@@ -130,7 +133,7 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
             const segments = path.slice(1).map((b, i) => ({ a: path[i], b, length: Math.hypot(b.x - path[i].x, b.y - path[i].y) }));
             const longest = [...segments].sort((a, b) => b.length - a.length)[0], span = longest.length;
             const active = route?.connections.includes(edge.id);
-            make('path', { d: path.map((point, i) => `${i ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '), class: `bb-topology-edge is-${edge.status}${active ? ' is-route' : ''}` });
+            make('path', { d: path.map((point, i) => `${i ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '), class: `bb-topology-edge is-${edge.status}${active ? ' is-route' : ''}`, 'data-connection-id': edge.id });
             if (edge.direction === 'forward') {
                 const last = segments.at(-1), ux = (last.b.x - last.a.x) / last.length, uy = (last.b.y - last.a.y) / last.length, ex = last.b.x, ey = last.b.y;
                 make('path', { d: `M ${ex - ux * 10 - uy * 4} ${ey - uy * 10 + ux * 4} L ${ex} ${ey} L ${ex - ux * 10 + uy * 4} ${ey - uy * 10 - ux * 4}`,
@@ -140,8 +143,10 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
             let angle = Math.atan2(longest.b.y - longest.a.y, longest.b.x - longest.a.x) * 180 / Math.PI;
             if (angle > 90) angle -= 180; if (angle < -90) angle += 180;
             const label = make('text', { x: 0, y: 0, dy: -8, transform: `translate(${cx} ${cy}) rotate(${angle})`,
-                class: 'bb-topology-edge-label', 'data-span': span, 'data-angle': angle }, edge.name);
+                class: 'bb-topology-edge-label', 'data-connection-id': edge.id, 'data-span': span, 'data-angle': angle }, edge.name);
+            if (label.getComputedTextLength() + 16 > span) label.textContent = tr(...passageKinds[edge.kind]);
             if (label.getComputedTextLength() + 16 > span) label.remove();
+            else { label.dataset.name = edge.name; labelGeometry.set(label, { segments: [...segments].sort((a, b) => b.length - a.length), name: edge.name, short: tr(...passageKinds[edge.kind]) }); }
         }
         for (const node of layout.nodes) {
             const x = node.x - node.width / 2, y = node.y - node.height / 2;
@@ -166,31 +171,61 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
         }
         const boxes = [...places.children].map(button => button.getBoundingClientRect()), labels = [];
         for (const label of svg.querySelectorAll('.bb-topology-edge-label')) {
-            const box = label.getBoundingClientRect();
-            const intersects = other => box.left - 4 < other.right && box.right + 4 > other.left && box.top - 4 < other.bottom && box.bottom + 4 > other.top;
-            if (boxes.some(intersects) || labels.some(intersects)) label.remove(); else labels.push(box);
+            const geometry = labelGeometry.get(label);
+            let placed = false;
+            for (const segment of geometry.segments) {
+                label.textContent = geometry.name;
+                if (label.getComputedTextLength() + 16 > segment.length) label.textContent = geometry.short;
+                if (label.getComputedTextLength() + 16 > segment.length) continue;
+                const cx = (segment.a.x + segment.b.x) / 2, cy = (segment.a.y + segment.b.y) / 2;
+                let angle = Math.atan2(segment.b.y - segment.a.y, segment.b.x - segment.a.x) * 180 / Math.PI;
+                if (angle > 90) angle -= 180; if (angle < -90) angle += 180;
+                label.setAttribute('transform', `translate(${cx} ${cy}) rotate(${angle})`);
+                label.dataset.span = segment.length; label.dataset.angle = angle;
+                for (const offset of [-8, 16, 4]) {
+                    label.setAttribute('dy', offset);
+                    const box = label.getBoundingClientRect();
+                    const intersects = other => box.left - 4 < other.right && box.right + 4 > other.left && box.top - 4 < other.bottom && box.bottom + 4 > other.top;
+                    if (boxes.some(intersects) || labels.some(intersects)) continue;
+                    labels.push(box); placed = true; break;
+                }
+                if (placed) break;
+            }
+            if (!placed) label.remove();
         }
-        const node = byId.get(selected); detail.replaceChildren();
-        const title = document.createElement('h3'); title.textContent = node.name; detail.append(title);
-        const threat = node.threat_level === 'danger' ? tr('Опасность', 'Danger') : node.threat_level === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
-        paragraph('', `${threat}${node.threat_reason ? ' · ' + node.threat_reason : ''}`);
+        const node = byId.get(selected), expanded = detail.querySelector('details')?.open && detail.dataset.placeId === selected;
+        detail.replaceChildren(); detail.dataset.placeId = selected;
+        const heading = document.createElement('div'); heading.className = 'bb-topology-detail-heading';
+        const title = document.createElement('h3'); title.textContent = node.name;
+        const condition = document.createElement('span'); condition.className = 'bb-topology-condition is-' + node.threat_level;
+        condition.textContent = node.threat_level === 'danger' ? tr('Опасность', 'Danger') : node.threat_level === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
+        condition.title = node.threat_reason; heading.append(title, condition); detail.append(heading);
+        paragraph('', node.summary, detail, 'bb-topology-summary');
         if (node.uncertain) paragraph('', tr('Сведения о месте не подтверждены.', 'The place information is unconfirmed.'));
-        paragraph('', node.summary);
-        paragraph(tr('Персонажи', 'Characters'), node.characters.map(char => `${char.name}${char.mood ? ' · ' + char.mood : ''}`).join('; '));
-        for (const char of node.characters) {
-            paragraph(char.name, char.description);
-            if (char.attitude) paragraph(tr('Отношение', 'Attitude'), char.attitude);
-            if (char.thought) paragraph(tr('Мысль', 'Thought'), char.thought);
-        }
-        paragraph(tr('Предметы', 'Objects'), node.poi.map(item => `${poiName(item)}${item.description ? ' — ' + item.description : ''}`).join('; '));
         paragraph(tr('Маршрут', 'Route'), selected === raw.player_place_id ? tr('Текущее место', 'Current place')
             : route ? route.places.map(id => byId.get(id).name).join(' → ')
-                : !raw.player_place_id ? tr('Положение игрока неизвестно.', 'The player position is unknown.') : tr('Подтверждённого маршрута нет.', 'No confirmed route.'));
-        for (const edge of raw.connections.filter(edge => edge.from === selected || edge.to === selected)) {
-            const other = byId.get(edge.from === selected ? edge.to : edge.from);
-            paragraph(tr('Проход', 'Passage'), `${edge.name} · ${other.name} · ${tr(...states[edge.status])}${edge.direction === 'forward' ? ` · ${byId.get(edge.from).name} → ${byId.get(edge.to).name}` : ''}${edge.evidence ? ' · ' + edge.evidence : ''}`);
+                : !raw.player_place_id ? tr('Положение игрока неизвестно.', 'The player position is unknown.') : tr('Подтверждённого маршрута нет.', 'No confirmed route.'), detail, 'bb-topology-route');
+        const adjacent = raw.connections.filter(edge => edge.from === selected || edge.to === selected);
+        if (adjacent.length) paragraph(tr('Проходы', 'Passages'), adjacent.map(edge => (edge.name.length <= 32 ? edge.name : tr(...passageKinds[edge.kind]))
+            + (edge.status === 'confirmed' ? '' : ' · ' + tr(...states[edge.status]))).join(' · '), detail, 'bb-topology-route');
+        const contents = document.createElement('div'); contents.className = 'bb-topology-contents';
+        paragraph(tr('Персонажи', 'Characters'), node.characters.map(char => char.name).join(', '), contents);
+        paragraph(tr('Предметы', 'Objects'), node.poi.map(poiName).join(', '), contents); detail.append(contents);
+        const extra = document.createElement('details'); extra.className = 'bb-topology-more'; extra.open = !!expanded;
+        const more = document.createElement('summary'); more.textContent = tr('Подробнее', 'Details'); extra.append(more);
+        paragraph('', node.summary, extra);
+        paragraph(tr('Обстановка', 'Conditions'), node.threat_reason, extra);
+        for (const char of node.characters) {
+            paragraph(char.name, [char.description, char.mood, char.attitude, char.thought].filter(Boolean).join(' · '), extra);
         }
+        for (const item of node.poi) paragraph(poiName(item), item.description, extra);
+        for (const edge of adjacent) {
+            const other = byId.get(edge.from === selected ? edge.to : edge.from);
+            paragraph(tr('Проход', 'Passage'), `${edge.name} · ${other.name} · ${tr(...states[edge.status])}${edge.direction === 'forward' ? ` · ${byId.get(edge.from).name} → ${byId.get(edge.to).name}` : ''}${edge.evidence ? ' · ' + edge.evidence : ''}`, extra);
+        }
+        if (extra.querySelector('p')) detail.append(extra);
         if (focusedId) places.querySelector(`[data-place-id="${focusedId}"]`)?.focus({ preventScroll: true });
+        else if (focusedMore) detail.querySelector('summary')?.focus({ preventScroll: true });
     }
     const observer = new ResizeObserver(draw); observer.observe(field);
     return { element, refresh: draw, select: id => {

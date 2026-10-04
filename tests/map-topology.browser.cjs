@@ -37,8 +37,13 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             showRadarModal(original, true);
         ` });
         await page.locator('.bb-topology-place').first().waitFor();
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Персонажи: Ибуки/);
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Предметы: Боккэн/);
+        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
         await page.getByRole('button', { name: /Бамбуковая роща/ }).click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Подтверждённого маршрута нет/);
+        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
+        await page.locator('.bb-topology-more > summary').click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Очень длинное название/);
         assert.equal(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Очень длинное' }).count(), 0);
         await page.getByRole('button', { name: /Лазарет/ }).click();
@@ -49,11 +54,27 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             await page.setViewportSize({ width, height: 1000 });
             await page.waitForTimeout(80);
             assert.ok(await page.locator('.bb-map-modal').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+            assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Сёдзи' }).count() > 0, 'Short doorway label is visible');
+            assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Ступени' }).count() > 0, 'Short stairs label is visible');
+            assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Тропинка' }).count() > 0, 'Long name retains a short type label at ' + width);
+            assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
+            assert.ok(await page.locator('.bb-topology-detail').evaluate(el => el.getBoundingClientRect().height < 230), 'Selection remains compact');
             await page.locator('.bb-topology-field').evaluate(field => {
                 const boxes = [...field.querySelectorAll('button')].map(el => el.getBoundingClientRect());
                 for (const label of field.querySelectorAll('.bb-topology-edge-label')) {
                     if (label.getComputedTextLength() + 16 > Number(label.dataset.span) + .1) throw Error('Label exceeds line');
                     if (Math.abs(Number(label.dataset.angle)) > 90) throw Error('Upside-down label');
+                    const path = field.querySelector('path[data-connection-id="' + label.dataset.connectionId + '"]');
+                    const coords = path.getAttribute('d').match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi).map(Number);
+                    const segments = [];
+                    for (let i = 2; i < coords.length; i += 2) segments.push({ x: (coords[i-2]+coords[i])/2, y: (coords[i-1]+coords[i+1])/2,
+                        length: Math.hypot(coords[i]-coords[i-2], coords[i+1]-coords[i-1]), angle: Math.atan2(coords[i+1]-coords[i-1],coords[i]-coords[i-2])*180/Math.PI });
+                    const matrix = label.transform.baseVal.consolidate().matrix;
+                    const longest = segments.find(segment => Math.abs(matrix.e-segment.x)<.1 && Math.abs(matrix.f-segment.y)<.1);
+                    if(!longest) throw Error('Label is not centered on a visible segment');
+                    let angle = longest.angle; if(angle>90)angle-=180; if(angle< -90)angle+=180;
+                    if(Math.abs(matrix.e-longest.x)>.1 || Math.abs(matrix.f-longest.y)>.1) throw Error('Label is not centered on its segment');
+                    if(Math.abs(Number(label.dataset.angle)-angle)>.1) throw Error('Label is not parallel to its segment');
                     const box = label.getBoundingClientRect();
                     if (boxes.some(b => box.left < b.right && box.right > b.left && box.top < b.bottom && box.bottom > b.top)) throw Error('Label overlaps a place');
                 }
@@ -67,6 +88,11 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.match(await page.locator('.bb-map-header-container').innerText(), /Surroundings/);
         await page.getByRole('button', { name: /Бамбуковая роща/ }).click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /No confirmed route/);
+        await page.locator('.bb-topology-more > summary').click();
+        await page.locator('.bb-topology-more > summary').focus();
+        await page.evaluate(() => mapTopologyView.refresh());
+        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), '');
+        assert.equal(await page.locator('.bb-topology-more > summary').evaluate(el => el === document.activeElement), true);
         await page.keyboard.press('Escape'); assert.equal(await page.locator('#bb-map-overlay').count(), 0);
         await page.evaluate(() => {
             settings.uiLanguage = 'ru'; chat_metadata.bb_map_mode = 'game';

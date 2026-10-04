@@ -121,7 +121,11 @@ unchanged until narrative events and a saved scan.
 `createMapTopologyView` renders the graph using native place buttons, typed outlines,
 direction/status marks and a selection card. Routes highlight only confirmed edges;
 selection does not change saved data. Layout responds to container width, and passage
-lines detour around intervening places. Names rotate parallel to a visible segment;
-short or colliding labels remain available in the selected place's passage details.
+lines detour around intervening places. Names rotate parallel to a visible segment.
+The longest free segment is preferred; another segment or side is used when labels
+collide. A long name falls back to the localized passage type; full names/evidence
+remain in the place details. The selection panel follows the approved compact
+prototype: name and condition, brief description, route and entity names. Full
+descriptions, moods, attitudes, thoughts and passage evidence expand under Details.
 Full-map observers are disconnected when the window closes or the chat/mode changes.
 The v3 preview compares places, passage facts, player position and entity movement.
