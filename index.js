@@ -300,7 +300,7 @@ function mapEffectsHtml(data, isSavedMap, previous) {
         ended: ['Завершён', 'Ended'], changed: ['Изменён', 'Changed'] };
     return `<details class="bb-map-review bb-map-effects" ${!isSavedMap && changes.length ? 'open' : ''}>
         <summary>${tr('Временные эффекты', 'Temporary effects')} <span>${effects.length}</span></summary>
-        <p>${tr('Состояния из повествования, без автоматического урона и бросков. Скан отмечает окончание по событиям истории.', 'Narrative states without automatic damage or rolls. Scans mark endings from story events.')}</p>
+        <p>${tr('Состояния сцены, зон и персонажей. Обновляются по событиям истории.', 'Scene, zone and character states. Updated from story events.')}</p>
         ${!effects.length && !changes.length ? `<p>${tr('Активных эффектов нет.', 'No active effects.')}</p>` : ''}
         <ul>${effects.filter(effect => !changes.some(change => change.after?.id === effect.id)).map(effect => `<li class="bb-map-change">${detail(effect)}</li>`).join('')}
         ${changes.map(change => `<li class="bb-map-change"><div class="bb-map-change-action">${tr(...actions[change.action])}</div>${detail(change.after || change.before)}
