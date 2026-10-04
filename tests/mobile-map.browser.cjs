@@ -102,6 +102,39 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         assert.equal(await page.evaluate(() => scans), before); // Stale dialog never scans a new chat.
         await page.evaluate(() => { settings.showWidget = false; renderMapWidget(); });
         assert.equal(await page.locator('#bb-map-widget').count(), 0);
+        await page.evaluate(() => {
+            context.stopGeneration = () => { globalThis.mainStops = (globalThis.mainStops || 0) + 1; };
+            globalThis.generateQuietPrompt = async () => new Promise(resolve => { globalThis.releaseScan = () => resolve(JSON.stringify(raw)); });
+            context.ConnectionManagerRequestService = {
+                getSupportedProfiles: () => [{ id: 'test-profile' }],
+                sendRequest: async (_id, _messages, _tokens, options) => { globalThis.requestSignal = options.signal; return new Promise(resolve => { globalThis.releaseScan = () => resolve({ content: JSON.stringify(raw) }); }); }
+            };
+            globalThis.fetch = async (_url, options) => { globalThis.requestSignal = options.signal; return new Promise(resolve => { globalThis.releaseScan = () => resolve({ ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(raw) } }] }) }); }); };
+            settings.customApiUrl = 'https://test.invalid/v1'; settings.customApiModel = 'test'; settings.connectionProfileId = 'test-profile';
+            chat_metadata.bb_map_data = createSavedMap(raw); globalThis.beforeScan = chat_metadata.bb_map_data;
+        });
+        for (const source of ['main', 'custom', 'profile']) {
+            await page.evaluate(source => { settings.generationSource = source; globalThis.releaseScan = null; showRadarModal(raw, true); setupExtensionSettings(true); }, source);
+            assert.equal(await page.locator('#bb-map-save-btn').isDisabled(), true);
+            assert.match(await page.locator('#bb-map-save-btn').textContent(), /✅.*ALREADY SAVED/);
+            const writesBefore = await page.evaluate(() => writes);
+            await page.locator('#bb-map-overlay [data-map-scan]').click();
+            await page.waitForFunction(() => typeof releaseScan === 'function');
+            assert.equal(await page.locator('#bb-map-overlay [data-map-cancel]').isVisible(), true);
+            if (source === 'custom') await page.locator('#bb-map-settings-wrapper [data-map-cancel]').evaluate(button => button.click());
+            else await page.locator('#bb-map-overlay [data-map-cancel]').click();
+            assert.equal(await page.evaluate(() => activeMapScan.controller.signal.aborted), true);
+            if (source !== 'main') assert.equal(await page.evaluate(() => requestSignal.aborted), true);
+            await page.evaluate(() => releaseScan());
+            await page.waitForFunction(() => !scanInProgress);
+            assert.equal(await page.evaluate(() => chat_metadata.bb_map_data === beforeScan), true);
+            assert.equal(await page.evaluate(() => writes), writesBefore);
+            assert.equal(await page.locator('#bb-map-save-btn').isDisabled(), true);
+            assert.equal(await page.locator('#bb-map-overlay [data-map-scan]').isEnabled(), true);
+            assert.equal(await page.locator('#bb-map-overlay [data-map-cancel]').isVisible(), false);
+            await page.locator('#bb-map-back-btn').click();
+        }
+        assert.equal(await page.evaluate(() => mainStops), 1);
         assert.deepEqual(errors, []);
         console.log('Phone square launcher, empty-chat map prompt, guarded scan/preview, saved map, viewport/footer, chat isolation and disabled widget passed.');
     } finally { await browser.close(); }

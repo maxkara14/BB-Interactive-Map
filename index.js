@@ -38,6 +38,7 @@ if (!['scene', 'surroundings'].includes(settings.scanScale)) settings.scanScale 
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
 let scanInProgress = false;
+let activeMapScan = null;
 let generationStopped = false;
 let generationSnapshot = null;
 let pendingReply = null;
@@ -97,14 +98,20 @@ Write descriptive values in the recent chat language; keys and enum values stay 
 </format>
 <context>Recent chat: """{{lastMessages}}"""</context>`;
 
-async function runMainGen(promptText) {
-    if (typeof generateQuietPrompt === 'function') {
-        return await generateQuietPrompt({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
-    } else if (typeof window['generateQuietPrompt'] === 'function') {
-        return await window['generateQuietPrompt']({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
-    } else {
-        throw new Error(tr('Функция генерации SillyTavern недоступна.', 'SillyTavern generation is unavailable.'));
-    }
+async function runMainGen(promptText, signal) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    const chatForRequest = SillyTavern.getContext();
+    const stop = () => { if (isSameChat(chatForRequest, SillyTavern.getContext())) chatForRequest.stopGeneration?.(); };
+    signal?.addEventListener('abort', stop, { once: true });
+    try {
+        if (typeof generateQuietPrompt === 'function') {
+            return await generateQuietPrompt({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
+        } else if (typeof window['generateQuietPrompt'] === 'function') {
+            return await window['generateQuietPrompt']({ quietPrompt: promptText, responseLength: MAP_MAX_TOKENS });
+        } else {
+            throw new Error(tr('Функция генерации SillyTavern недоступна.', 'SillyTavern generation is unavailable.'));
+        }
+    } finally { signal?.removeEventListener('abort', stop); }
 }
 
 function getProfileService() {
@@ -115,7 +122,7 @@ function getProfileService() {
     return service;
 }
 
-async function runProfileGen(promptText) {
+async function runProfileGen(promptText, signal) {
     const service = getProfileService();
     let profiles;
     try {
@@ -130,8 +137,9 @@ async function runProfileGen(promptText) {
     try {
         response = await service.sendRequest(settings.connectionProfileId,
             [{ role: 'system', content: 'Generate only the requested JSON map.' }, { role: 'user', content: promptText }],
-            MAP_MAX_TOKENS, { stream: false, extractData: true, includePreset: true, includeInstruct: true });
+            MAP_MAX_TOKENS, { stream: false, extractData: true, includePreset: true, includeInstruct: true, signal });
     } catch {
+        if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
         throw new Error(tr('Запрос через профиль не удался.', 'The profile request failed.'));
     }
     const content = typeof response === 'string' ? response : response?.content;
@@ -141,19 +149,20 @@ async function runProfileGen(promptText) {
     return content;
 }
 
-async function generateMapFast(promptText) {
+async function generateMapFast(promptText, signal) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     const s = settings;
-    if (s.generationSource === 'profile') return runProfileGen(promptText);
+    if (s.generationSource === 'profile') return runProfileGen(promptText, signal);
     if (s.generationSource === 'custom') {
         if (!s.customApiUrl || !s.customApiModel) {
-            return runMainGen(promptText);
+            return runMainGen(promptText, signal);
         }
         try {
             const baseUrl = s.customApiUrl.replace(/\/$/, '');
             const endpoint = baseUrl + '/chat/completions';
             
             const response = await fetch(endpoint, {
-                method: 'POST',
+                method: 'POST', signal,
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${s.customApiKey || ''}`
@@ -176,11 +185,12 @@ async function generateMapFast(promptText) {
             if (!content.trim()) throw new Error('Empty response');
             return content;
         } catch {
+            if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
             console.warn('[BB Map] Custom API failed; using the main connection.');
-            return await runMainGen(promptText);
+            return await runMainGen(promptText, signal);
         }
     } else {
-        return await runMainGen(promptText);
+        return await runMainGen(promptText, signal);
     }
 }
 
@@ -481,6 +491,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     `;
 
     document.body.appendChild(overlay);
+    mountMapScanControls(overlay, chatForMap, expectedMap);
     requestAnimationFrame(() => overlay.style.opacity = '1');
 
     const telemetryScreen = overlay.querySelector('#bb-telemetry');
@@ -694,7 +705,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
         ${!isSavedMap && requiresTopologyReview(expectedMap?.raw, data) ? `<p class="bb-map-change-warning">${tr('Положение или проходы требуют проверки.', 'Position or passages need review.')}</p>` : ''}
         ${mode === 'game' ? mapObjectsHtml(data, isSavedMap) + mapEffectsHtml(data, isSavedMap, expectedMap?.raw) : ''}
         ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
-        <div class="bb-map-controls">${!isSavedMap ? `<button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn">${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>` : ''}
+        <div class="bb-map-controls"><button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn" ${isSavedMap ? 'disabled' : ''}>${isSavedMap ? '✅ ' + tr('УЖЕ В ПАМЯТИ', 'ALREADY SAVED') : tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>
         <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button><button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
     mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, showRoute: !isSavedMap || mode !== 'game', previous: !isSavedMap ? expectedMap?.raw : null, onSelect: place => {
         if (!isSavedMap || mode !== 'game') return;
@@ -729,7 +740,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
         injectCurrentMapContext(); renderMapWidget(); setupExtensionSettings(true);
         showRadarModal(data, true, chatForMap, chat_metadata.bb_map_data);
     };
-    document.body.append(overlay); mapTopologyView.refresh();
+    document.body.append(overlay); mountMapScanControls(overlay, chatForMap, expectedMap); mapTopologyView.refresh();
     requestAnimationFrame(() => { if (overlay.isConnected) { overlay.style.opacity = '1'; overlay.querySelector('.bb-topology-place')?.focus({ preventScroll: true }); } });
 }
 
@@ -995,7 +1006,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     scene.querySelector('input').focus();
 }
 
-async function createMapCandidate(chatForScan, scaleMode) {
+async function createMapCandidate(chatForScan, scaleMode, signal) {
     const chat = chatForScan.chat;
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
     
@@ -1021,7 +1032,8 @@ async function createMapCandidate(chatForScan, scaleMode) {
         ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current scene, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
     const effectRules = modeForScan === 'game'
         ? '\nTEMPORARY EFFECTS: Return a top-level effects array (max 16). Each effect has name, scope (scene, zone, or character), target (exact schematic_name, zone name, or character/player name), description (brief circumstance, no numerical penalty), source (established cause), expires_when (concrete narrative end condition), status (active or ended), evidence (supporting narrative event), and uncertain (boolean). Do not invent effects, stats, damage, rolls, timers or player actions. Environmental effects belong to their scene/zone, not a traveling character; bodily or mental states may belong to a character. Retain previously active effects while applicable; omission alone is not an ending. Report ended only when a story event satisfies the end condition, with evidence; mark uncertain true for ambiguous changes. Empty effects means no new reported effects; previous applicable states remain until an established ending. Do not revive ended effects or retain states of departed characters/old zones.' : '';
-    const result = await generateMapFast(prompt + objectScopeRules + effectRules);
+    const result = await generateMapFast(prompt + objectScopeRules + effectRules, signal);
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan) return null;
     const candidate = normalizeGraphMapData(extractJSON(result), prevData?.raw);
@@ -1030,6 +1042,45 @@ async function createMapCandidate(chatForScan, scaleMode) {
     if (modeForScan === 'game') return reconcileMapEffects(objects, prevData?.raw, chatForScan.name1);
     const { effects, ...classic } = objects;
     return prevData?.raw?.effects ? { ...classic, effects: prevData.raw.effects } : classic;
+}
+
+function syncMapScanControls() {
+    for (const button of document.querySelectorAll('[data-map-scan]')) button.disabled = scanInProgress;
+    for (const button of document.querySelectorAll('[data-map-cancel]')) {
+        button.hidden = !scanInProgress;
+        button.disabled = !!activeMapScan?.controller.signal.aborted;
+    }
+}
+
+function beginMapScan(chat) {
+    const operation = { chat, controller: new AbortController() };
+    activeMapScan = operation; scanInProgress = true; syncMapScanControls();
+    return operation;
+}
+
+function finishMapScan(operation) {
+    if (activeMapScan !== operation) return;
+    activeMapScan = null; scanInProgress = false; syncMapScanControls();
+}
+
+function cancelMapScan() {
+    activeMapScan?.controller.abort();
+    clearTimeout(autoScanTimer); autoScanTimer = null;
+    if (autoStatus === 'scanning' || autoStatus === 'waiting') autoStatus = 'idle';
+    syncMapScanControls(); renderMapWidget();
+}
+
+function mountMapScanControls(overlay, chatForMap, expectedMap) {
+    const controls = document.createElement('div'); controls.className = 'bb-map-scan-controls';
+    controls.innerHTML = `<button type="button" class="bb-map-btn" data-map-scan>${tr('ОБНОВИТЬ КАРТУ', 'UPDATE MAP')}</button>
+        <button type="button" class="bb-map-btn" data-map-cancel>${tr('ОТМЕНИТЬ ГЕНЕРАЦИЮ', 'CANCEL GENERATION')}</button>`;
+    controls.querySelector('[data-map-scan]').onclick = event => {
+        if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap) return;
+        triggerMapScan(event.currentTarget, settings.scanScale);
+    };
+    controls.querySelector('[data-map-cancel]').onclick = cancelMapScan;
+    const footer = overlay.querySelector('.bb-map-controls'); footer.before(controls);
+    syncMapScanControls();
 }
 
 async function triggerMapScan(btnElement, scaleMode = 'scene') {
@@ -1043,15 +1094,16 @@ async function triggerMapScan(btnElement, scaleMode = 'scene') {
     const oldHtml = btnElement.innerHTML;
     btnElement.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i>&nbsp; ${tr('СКАНИРОВАНИЕ...', 'SCANNING...')}`;
     btnElement.disabled = true;
-    scanInProgress = true;
+    const operation = beginMapScan(chatForScan);
     try {
-        const data = await createMapCandidate(chatForScan, scaleMode);
+        const data = await createMapCandidate(chatForScan, scaleMode, operation.controller.signal);
         if (!data) {
             toastr.warning(tr('Чат или карта изменились во время сканирования. Результат не сохранён.', 'The chat or map changed during the scan. The result was discarded.'), 'BB Map');
             return;
         }
         showRadarModal(data, false, chatForScan);
     } catch (err) {
+        if (operation.controller.signal.aborted) { toastr.info(tr('Генерация карты отменена.', 'Map generation cancelled.'), 'BB Map'); return; }
         // @ts-ignore
         const message = err?.message === 'invalid_effects'
             ? tr('Ответ содержит некорректные временные эффекты. Проверьте источник, цель и условие окончания.', 'The response contains invalid temporary effects. Check the source, target and end condition.') : err?.message === 'invalid_map'
@@ -1059,7 +1111,7 @@ async function triggerMapScan(btnElement, scaleMode = 'scene') {
             : err.message;
         toastr.error(tr('Ошибка карты: ', 'Map error: ') + message, 'BB Map');
     } finally {
-        scanInProgress = false;
+        finishMapScan(operation);
         btnElement.innerHTML = oldHtml;
         btnElement.disabled = false;
     }
@@ -1098,11 +1150,11 @@ function queueAutoScan(chatForScan) {
         const reply = chatForScan.chat?.at(-1);
         const replyText = reply?.mes;
         const baseMap = getMapDataForCurrentChat();
-        scanInProgress = true;
+        const operation = beginMapScan(chatForScan);
         autoStatus = 'scanning';
         renderMapWidget();
         try {
-            const candidate = await createMapCandidate(chatForScan, settings.scanScale);
+            const candidate = await createMapCandidate(chatForScan, settings.scanScale, operation.controller.signal);
             if (!candidate || generationStopped || !settings.autoUpdate || getMapDataForCurrentChat() !== baseMap
                 || chatForScan.chat?.at(-1) !== reply || reply?.mes !== replyText
                 || !isSameChat(chatForScan, SillyTavern.getContext())) {
@@ -1126,12 +1178,13 @@ function queueAutoScan(chatForScan) {
             autoCandidateBase = getMapDataForCurrentChat();
             autoStatus = 'ready';
         } catch {
+            if (operation.controller.signal.aborted) { if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle'; return; }
             if (isSameChat(chatForScan, SillyTavern.getContext())) {
                 console.warn('[BB Map] Automatic scan failed. Check the selected connection and try a manual scan.');
                 autoStatus = 'error';
             }
         } finally {
-            scanInProgress = false;
+            finishMapScan(operation);
             if (isSameChat(chatForScan, SillyTavern.getContext())) renderMapWidget();
         }
     }, 1500);
@@ -1383,6 +1436,10 @@ function setupExtensionSettings(rebuild = false) {
     const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {
         void triggerMapScan(scan, settings.scanScale);
     });
+    scan.dataset.mapScan = '';
+    const cancelScan = action(mapTools, tr('Отменить генерацию', 'Cancel generation'), cancelMapScan);
+    cancelScan.dataset.mapCancel = '';
+    syncMapScanControls();
     if (savedMap?.raw) action(mapTools, tr('Открыть сохранённую карту', 'Open saved map'), () => {
         if (!isSameChat(chatForTools, SillyTavern.getContext())) return setupExtensionSettings(true);
         showRadarModal(getMapDataForCurrentChat().raw, true);
@@ -1551,6 +1608,7 @@ function setupExtensionSettings(rebuild = false) {
     note(memory, tr('Добавьте {{bb_map}} в свой пресет вручную.', 'Add {{bb_map}} to your preset manually.'));
 
     if (!existing) target.append(panel);
+    syncMapScanControls();
 }
 
 function graphWidgetHtml(raw, changes = new Map()) {
@@ -1609,6 +1667,10 @@ function showMapLaunchPrompt() {
     const close = () => { overlay.remove(); if (focusBefore?.isConnected) focusBefore.focus({ preventScroll: true }); };
     overlay.querySelector('#bb-map-back-btn').onclick = close;
     const scanButton = overlay.querySelector('#bb-map-create-btn');
+    scanButton.dataset.mapScan = '';
+    const cancelScan = document.createElement('button'); cancelScan.type = 'button'; cancelScan.className = 'bb-map-btn'; cancelScan.dataset.mapCancel = '';
+    cancelScan.textContent = tr('ОТМЕНИТЬ ГЕНЕРАЦИЮ', 'CANCEL GENERATION'); cancelScan.onclick = cancelMapScan;
+    overlay.querySelector('.bb-map-controls').append(cancelScan);
     scanButton.onclick = () => {
         if (!isSameChat(chatForPrompt, SillyTavern.getContext()) || getMapDataForCurrentChat()?.raw) { close(); renderMapWidget(); return; }
         triggerMapScan(scanButton, settings.scanScale);
@@ -1616,13 +1678,13 @@ function showMapLaunchPrompt() {
     overlay.addEventListener('keydown', event => {
         if (event.key === 'Escape') { event.preventDefault(); close(); }
         if (event.key === 'Tab') {
-            const buttons = [...overlay.querySelectorAll('button:not(:disabled)')];
+            const buttons = [...overlay.querySelectorAll('button:not(:disabled)')].filter(button => !button.hidden);
             const first = buttons[0], last = buttons.at(-1);
             if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
             else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
         }
     });
-    document.body.append(overlay);
+    document.body.append(overlay); syncMapScanControls();
     requestAnimationFrame(() => { if (overlay.isConnected) { overlay.style.opacity = '1'; scanButton.focus({ preventScroll: true }); } });
 }
 
@@ -1836,6 +1898,7 @@ jQuery(async () => {
         
         eventSource.on(event_types.CHAT_CHANGED, () => {
             mapTravelController?.abort();
+            activeMapScan?.controller.abort();
             resetAutoUpdate();
             removeMapOverlay();
             injectCurrentMapContext();

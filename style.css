@@ -624,3 +624,7 @@
 
 .bb-map-widget-launch { position: relative; }
 .bb-map-widget-launch.has-update::after { content: ''; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: #fbbf24; }
+
+.bb-map-scan-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.bb-map-scan-controls [hidden] { display: none; }
+.bb-map-btn:disabled { opacity: .55; cursor: default; }
