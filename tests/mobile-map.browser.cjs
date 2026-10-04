@@ -32,7 +32,11 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             await page.evaluate(() => renderMapWidget());
             assert.equal(await page.locator('.bb-map-widget-launch').isVisible(), true);
             const size = await page.locator('#bb-map-widget').boundingBox();
-            assert.equal(size.width, 44); assert.ok(size.height <= 46);
+            assert.equal(size.width, 44); assert.equal(size.height, 44);
+            const icon = await page.locator('.bb-map-widget-launch svg').boundingBox();
+            assert.ok(Math.abs((icon.x + icon.width / 2) - (size.x + size.width / 2)) < .1);
+            assert.ok(Math.abs((icon.y + icon.height / 2) - (size.y + size.height / 2)) < .1);
+            if (process.argv[3]) { fs.mkdirSync(process.argv[3], { recursive: true }); await page.locator('#bb-map-widget').screenshot({ path: path.join(process.argv[3], 'phone-launcher-' + width + '.png') }); }
             await page.locator('.bb-map-widget-launch').click();
             assert.equal(await page.locator('#bb-map-create-btn').isVisible(), true);
             assert.equal(await page.evaluate(() => scans), 0);
