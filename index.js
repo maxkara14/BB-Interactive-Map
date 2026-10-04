@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString } from './map-state.js';
+import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
@@ -226,7 +226,7 @@ function getMapContextForCurrentChat() {
     const memory = saved?.raw?.unlocated_objects?.some(item => item.item_state !== 'held')
         ? buildMapContextString(activeMapObjects(saved.raw)) : saved?.context || '';
     if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
-    return `${memory}\n[Game map: The center zone is the player's last known position. Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
+    return `${memory}${buildMapEffectsContext(saved?.raw, SillyTavern.getContext().name1)}\n[Game map: The center zone is the player's last known position. Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
 }
 
 // === ИЗМЕНЕНО: Логика инъекции теперь учитывает useMacro ===
@@ -252,6 +252,9 @@ function mapFieldLabel(key) {
         attitude: ['Отношение', 'Attitude'], thought: ['Мысль', 'Thought'],
         item_state: ['Положение предмета', 'Object state'], holder: ['У кого', 'Holder'],
         state_reason: ['Основание в истории', 'Narrative evidence'], last_known: ['Последнее известное положение', 'Last known whereabouts'],
+        source: ['Источник эффекта', 'Effect source'], expires_when: ['Условие окончания', 'End condition'],
+        scope: ['Область действия', 'Scope'], target: ['К чему относится', 'Target'],
+        status: ['Статус', 'Status'], evidence: ['Основание в истории', 'Narrative evidence'],
     };
     return tr(...labels[key]);
 }
@@ -286,6 +289,24 @@ function mapObjectsHtml(data, isSavedMap) {
         <p>${tr('Окружение относится к текущей сцене. Между сценами сохраняются вещи игрока и персонажей, которые сейчас присутствуют. Правки — через «Править карту».', 'Surroundings belong to the current scene. Carry items with the player and characters currently present. Use Edit map to correct them.')}</p>
         <ul>${objects.map(item => `<li class="bb-map-change"><strong>${escapeHtml(item.name)}</strong><div>${escapeHtml(mapObjectLabel(item))}${item.item_state !== 'unknown' && item.zone ? ` · ${escapeHtml(item.zone)}` : ''}</div>
         ${item.state_reason ? `<small>${escapeHtml(item.state_reason)}</small>` : ''}</li>`).join('')}</ul></details>`;
+}
+
+function mapEffectsHtml(data, isSavedMap, previous) {
+    const effects = (data.effects || []).filter(effect => effect.status === 'active' && isMapEffectApplicable(effect, data, SillyTavern.getContext().name1));
+    const changes = isSavedMap ? [] : getMapEffectChanges(previous, data);
+    const detail = effect => `<strong>${escapeHtml(effect.name)}</strong><div>${escapeHtml(effect.target)} · ${escapeHtml(effect.description)}</div>
+        <small>${tr('Источник:', 'Source:')} ${escapeHtml(effect.source)}<br>${tr('Окончание:', 'Ends when:')} ${escapeHtml(effect.expires_when)}</small>`;
+    const actions = { added: ['Добавлен', 'Added'], removed: ['Вне текущей сцены / убран', 'Outside the current scene / removed'],
+        ended: ['Завершён', 'Ended'], changed: ['Изменён', 'Changed'] };
+    return `<details class="bb-map-review bb-map-effects" ${!isSavedMap && changes.length ? 'open' : ''}>
+        <summary>${tr('Временные эффекты', 'Temporary effects')} <span>${effects.length}</span></summary>
+        <p>${tr('Состояния из повествования, без автоматического урона и бросков. Скан отмечает окончание по событиям истории.', 'Narrative states without automatic damage or rolls. Scans mark endings from story events.')}</p>
+        ${!effects.length && !changes.length ? `<p>${tr('Активных эффектов нет.', 'No active effects.')}</p>` : ''}
+        <ul>${effects.filter(effect => !changes.some(change => change.after?.id === effect.id)).map(effect => `<li class="bb-map-change">${detail(effect)}</li>`).join('')}
+        ${changes.map(change => `<li class="bb-map-change"><div class="bb-map-change-action">${tr(...actions[change.action])}</div>${detail(change.after || change.before)}
+        ${change.after?.evidence ? `<small>${escapeHtml(change.after.evidence)}</small>` : ''}</li>`).join('')}</ul>
+        ${requiresEffectReview(previous, data) && !isSavedMap ? `<p class="bb-map-change-warning">${tr('Эффект или его окончание требуют проверки; автосохранение приостановлено.', 'An effect or its ending needs review; automatic saving is paused.')}</p>` : ''}
+    </details>`;
 }
 
 function mapChangesHtml(previous, next) {
@@ -433,6 +454,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
 
             ${gameMode ? `<section id="bb-map-travel" class="bb-map-travel" aria-live="polite"><p>${tr('Выберите соседнюю зону для перехода.', 'Select a neighboring zone to travel.')}</p></section>` : ''}
             ${getMapMode(chat_metadata) === 'game' ? mapObjectsHtml(data, isSavedMap) : ''}
+            ${getMapMode(chat_metadata) === 'game' ? mapEffectsHtml(data, isSavedMap, expectedMap?.raw) : ''}
             ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
 
             <div class="bb-map-controls">
@@ -647,7 +669,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     const field = (target, key, value, options = null, required = false, label = mapFieldLabel(key)) => {
         const wrapper = document.createElement('label');
         wrapper.textContent = label;
-        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere', 'state_reason'].includes(key) ? 'textarea' : 'input');
+        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere', 'state_reason', 'source', 'expires_when', 'evidence'].includes(key) ? 'textarea' : 'input');
         if (options) for (const [optionValue, text] of options) {
             const option = document.createElement('option');
             option.value = optionValue;
@@ -728,6 +750,32 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         for (const item of data.unlocated_objects) addEntity(memory, 'object', item, '');
         form.querySelector('.bb-map-edit-zones').append(memory);
     }
+    if (editObjects) {
+        const section = document.createElement('details');
+        section.className = 'bb-map-edit-zone bb-map-edit-effects';
+        section.innerHTML = `<summary>${tr('Временные эффекты', 'Temporary effects')}</summary><div class="bb-map-edit-entities"></div>`;
+        const target = section.querySelector('div');
+        const addEffect = (effect = {}) => {
+            const block = document.createElement('fieldset');
+            block.dataset.effect = '';
+            field(block, 'name', effect.name, null, true);
+            field(block, 'scope', effect.scope || 'scene', [['scene', tr('Сцена', 'Scene')], ['zone', tr('Зона', 'Zone')], ['character', tr('Персонаж', 'Character')]]);
+            field(block, 'target', effect.target || data.schematic_name, null, true);
+            for (const key of ['description', 'source', 'expires_when']) field(block, key, effect[key], null, true);
+            field(block, 'status', effect.status || 'active', [['active', tr('Действует', 'Active')], ['ended', tr('Завершён', 'Ended')]]);
+            field(block, 'evidence', effect.evidence);
+            const remove = document.createElement('button');
+            remove.type = 'button'; remove.className = 'bb-map-edit-remove';
+            remove.textContent = tr('Убрать эффект', 'Remove effect'); remove.onclick = () => block.remove();
+            block.append(remove); target.append(block);
+        };
+        for (const effect of data.effects || []) addEffect(effect);
+        const add = document.createElement('button');
+        add.type = 'button'; add.className = 'bb-map-btn';
+        add.textContent = tr('+ Эффект', '+ Effect');
+        add.onclick = () => { section.open = true; addEffect(); };
+        section.append(add); form.querySelector('.bb-map-edit-zones').append(section);
+    }
     const cancel = () => {
         showRadarModal(data, isSavedMap, chatForMap, expectedMap);
         document.getElementById('bb-map-edit-btn')?.focus();
@@ -747,7 +795,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             }
             const readFields = target => Object.fromEntries([...target.querySelectorAll(':scope > label > input, :scope > label > textarea, :scope > label > select')]
                 .map(input => [input.name, input.value]));
-            const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: [...form.querySelectorAll('.bb-map-edit-zone')].map((section, index) => ({
+            const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: [...form.querySelectorAll('.bb-map-edit-zone[data-zone-index]')].map((section, index) => ({
                 ...readFields(section.querySelector('.bb-map-edit-zone-body')), position: data.zones[index].position, poi: [], characters: [],
             })) };
             for (const block of form.querySelectorAll('[data-entity-type]')) {
@@ -764,13 +812,20 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
                 draft.zones[Number(destination)][block.dataset.entityType === 'character' ? 'characters' : 'poi'].push(entry);
             }
             if (data.unlocated_objects && !draft.unlocated_objects) draft.unlocated_objects = [];
+            if (editObjects) draft.effects = [...form.querySelectorAll('[data-effect]')].map(block => ({
+                ...readFields(block), uncertain: false, evidence: readFields(block).evidence || tr('Подтверждено игроком при правке карты.', 'Confirmed by the player in the map editor.'),
+            }));
+            else if (data.effects) draft.effects = data.effects;
             const edited = normalizeMapData(draft, expectedMap?.raw);
+            if (editObjects && edited.effects.some(effect => effect.status === 'active'
+                && !isMapEffectApplicable(effect, edited, chatForMap.name1))) throw new Error('invalid_effects');
             if (autoCandidate === data) autoCandidate = edited;
             showRadarModal(edited, false, chatForMap, expectedMap);
         } catch (error) {
             const message = form.querySelector('.bb-map-edit-error');
             message.hidden = false;
-            message.textContent = error.message === 'invalid_map'
+            message.textContent = error.message === 'invalid_effects'
+                ? tr('Для эффекта нужны название, описание, источник, условие окончания и точное имя текущей сцены, зоны или персонажа (включая игрока). Не более 16 эффектов, поля до 1500 символов.', 'Effects need a name, description, source, end condition and exact current scene, zone or character/player name. Up to 16 effects, fields up to 1500 characters.') : error.message === 'invalid_map'
                 ? tr('Проверьте названия и положение. Для предмета у персонажа нужен владелец, для оставленного вне сцены — основание. Состояние «В зоне» требует выбора зоны.', 'Check names and whereabouts. Held objects need a holder; objects left outside the scene need evidence. In the zone requires a selected zone.') : error.message;
             message.scrollIntoView({ block: 'nearest' });
         }
@@ -797,7 +852,8 @@ async function createMapCandidate(chatForScan, scaleMode) {
     }
     let prevMapInstruction = "";
     if (prevData && prevData.context) {
-        const previousContext = prevData.raw ? buildMapContextString(activeMapObjects(prevData.raw)) : prevData.context;
+        const previousContext = prevData.raw ? buildMapContextString(activeMapObjects(prevData.raw))
+            + (modeForScan === 'game' ? buildMapEffectsContext(prevData.raw, chatForScan.name1) : '') : prevData.context;
         prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${previousContext}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
     }
 
@@ -808,12 +864,17 @@ async function createMapCandidate(chatForScan, scaleMode) {
         .replace('{{previousMap}}', prevMapInstruction);
     const objectScopeRules = modeForScan === 'game'
         ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current grid, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
-    const result = await generateMapFast(prompt + objectScopeRules);
+    const effectRules = modeForScan === 'game'
+        ? '\nTEMPORARY EFFECTS: Return a top-level effects array (max 16). Each effect has name, scope (scene, zone, or character), target (exact schematic_name, zone name, or character/player name), description (brief circumstance, no numerical penalty), source (established cause), expires_when (concrete narrative end condition), status (active or ended), evidence (supporting narrative event), and uncertain (boolean). Do not invent effects, stats, damage, rolls, timers or player actions. Environmental effects belong to their scene/zone, not a traveling character; bodily or mental states may belong to a character. Retain previously active effects while applicable; omission alone is not an ending. Report ended only when a story event satisfies the end condition, with evidence; mark uncertain true for ambiguous changes. Empty effects means no new reported effects; previous applicable states remain until an established ending. Do not revive ended effects or retain states of departed characters/old zones.' : '';
+    const result = await generateMapFast(prompt + objectScopeRules + effectRules);
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan) return null;
     const candidate = normalizeMapData(extractJSON(result), prevData?.raw);
-    return modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
+    const objects = modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
         ? reconcileMapObjects(candidate, prevData?.raw, chatForScan.name1) : candidate;
+    if (modeForScan === 'game') return reconcileMapEffects(objects, prevData?.raw, chatForScan.name1);
+    const { effects, ...classic } = objects;
+    return prevData?.raw?.effects ? { ...classic, effects: prevData.raw.effects } : classic;
 }
 
 async function triggerMapScan(btnElement, scaleMode = 'local') {
@@ -837,7 +898,8 @@ async function triggerMapScan(btnElement, scaleMode = 'local') {
         showRadarModal(data, false, chatForScan);
     } catch (err) {
         // @ts-ignore
-        const message = err?.message === 'invalid_map'
+        const message = err?.message === 'invalid_effects'
+            ? tr('Ответ содержит некорректные временные эффекты. Проверьте источник, цель и условие окончания.', 'The response contains invalid temporary effects. Check the source, target and end condition.') : err?.message === 'invalid_map'
             ? tr('Ответ содержит некорректную структуру карты. Попробуйте ещё раз.', 'The response has an invalid map structure. Please try again.')
             : err.message;
         toastr.error(tr('Ошибка карты: ', 'Map error: ') + message, 'BB Map');
@@ -893,7 +955,8 @@ function queueAutoScan(chatForScan) {
                 return;
             }
             if (settings.autoApply && !hasLegacyObjectMemory(baseMap.raw)
-                && !(getMapMode(chat_metadata) === 'game' && requiresObjectReview(baseMap.raw, candidate, chatForScan.name1))) {
+                && !(getMapMode(chat_metadata) === 'game' && (requiresObjectReview(baseMap.raw, candidate, chatForScan.name1)
+                    || requiresEffectReview(baseMap.raw, candidate)))) {
                 chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
                 await saveChatConditional();
                 if (isSameChat(chatForScan, SillyTavern.getContext())) {

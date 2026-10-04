@@ -153,6 +153,60 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         await page.evaluate(() => showRadarModal(chat_metadata.bb_map_data.raw, true));
         await page.locator('.bb-map-objects > summary').click();
         assert.doesNotMatch(await page.locator('.bb-map-objects').innerText(), /Боккэн|Старые половицы/);
+
+        // Actual temporary-effect scan, review, editor, context and ending handlers.
+        await page.evaluate(() => {
+            settings.uiLanguage = 'ru';
+            response.effects = [{ name: 'Дым', scope: 'zone', target: 'Дорожка', description: 'Дым мешает обзору.',
+                source: 'Дымящий костёр', expires_when: 'Дым рассеется.', evidence: 'Костёр начал дымить.', uncertain: true }];
+            queueAutoScan(context);
+        });
+        await page.waitForFunction(() => autoStatus === 'ready');
+        assert.equal(await page.evaluate(() => writes), 6);
+        await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
+        assert.match(await page.locator('.bb-map-effects').innerText(), /Источник: Дымящий костёр/);
+        assert.match(await page.locator('.bb-map-effects').innerText(), /Окончание: Дым рассеется/);
+        for (const width of [1440, 390]) {
+            await page.setViewportSize({ width, height: 1000 });
+            assert.ok(await page.locator('.bb-map-modal').evaluate(el => el.scrollWidth <= el.clientWidth + 1));
+        }
+        await page.locator('#bb-map-edit-btn').click();
+        await page.locator('.bb-map-edit-effects > summary').click();
+        await page.locator('[data-effect] [name="expires_when"]').fill('Дым рассеется после проветривания.');
+        await page.getByRole('button', { name: 'ПРОВЕРИТЬ ПРАВКИ', exact: true }).click();
+        await page.locator('#bb-map-save-btn').click();
+        assert.equal(await page.evaluate(() => writes), 7);
+        assert.match(await page.evaluate(() => getMapContextForCurrentChat()), /Temporary scene effects.*Дым/s);
+        await page.evaluate(async () => {
+            const before = JSON.stringify(chat_metadata.bb_map_data);
+            chat_metadata.bb_map_mode = 'classic';
+            if (getMapContextForCurrentChat().includes('Temporary scene effects')) throw Error('Classic context leaked effects');
+            showRadarModal(chat_metadata.bb_map_data.raw, true);
+            const classicScan = await createMapCandidate(context, 'local');
+            if (JSON.stringify(classicScan.effects) !== JSON.stringify(chat_metadata.bb_map_data.raw.effects)) throw Error('Classic scan changed game effects');
+            if (JSON.stringify(chat_metadata.bb_map_data) !== before) throw Error('Mode switching wrote the map');
+            chat_metadata.bb_map_mode = 'game'; response.effects = []; queueAutoScan(context);
+        });
+        assert.equal(await page.locator('.bb-map-effects').count(), 0);
+        await page.waitForFunction(() => autoStatus === 'updated');
+        assert.equal(await page.evaluate(() => writes), 8);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.effects[0].status), 'active');
+        await page.evaluate(() => {
+            response.effects = [{ ...chat_metadata.bb_map_data.raw.effects[0], status: 'ended', evidence: 'После проветривания дым полностью рассеялся.', uncertain: true }];
+            queueAutoScan(context);
+        });
+        await page.waitForFunction(() => autoStatus === 'ready');
+        assert.equal(await page.evaluate(() => writes), 8);
+        await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
+        assert.match(await page.locator('.bb-map-effects').innerText(), /Завершён/);
+        await page.locator('#bb-map-save-btn').click();
+        assert.equal(await page.evaluate(() => writes), 9);
+        assert.doesNotMatch(await page.evaluate(() => getMapContextForCurrentChat()), /Temporary scene effects/);
+        assert.equal(await page.evaluate(() => restorePreviousMap(chat_metadata.bb_map_data).raw.effects[0].status), 'active');
+        await page.evaluate(() => { response.effects = []; queueAutoScan(context); });
+        await page.waitForFunction(() => autoStatus === 'updated');
+        assert.equal(await page.evaluate(() => writes), 10);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.effects.length), 0);
         assert.equal(await page.evaluate(() => messages[0].mes), 'Мира берёт меч.');
         assert.deepEqual(errors, []);
         console.log('Object scan, review gate, manual corrections, save/rollback snapshot, memory, auto-apply, stale chat, modes and RU/EN passed.');

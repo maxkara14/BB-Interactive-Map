@@ -109,6 +109,76 @@ export function activeMapObjects(raw) {
     return { ...raw, unlocated_objects: (raw?.unlocated_objects || []).filter(item => item.item_state === 'held') };
 }
 
+function normalizeEffects(input, previous = []) {
+    if (!Array.isArray(input) || input.length > 16) throw new Error('invalid_effects');
+    let nextId = Math.max(0, ...previous.map(effect => Number(/^bbe-(\d+)$/.exec(effect.id || '')?.[1]) || 0)) + 1;
+    const key = effect => `${effect.scope}:${holderKey(effect.target)}:${holderKey(effect.name)}`;
+    const used = new Set();
+    return input.map(value => {
+        if (!value || !['scene', 'zone', 'character'].includes(value.scope)
+            || !['active', 'ended'].includes(value.status || 'active')
+            || (value.uncertain !== undefined && typeof value.uncertain !== 'boolean')) throw new Error('invalid_effects');
+        const text = field => {
+            if (typeof value[field] !== 'string' || !value[field].trim() || value[field].length > 1500) throw new Error('invalid_effects');
+            return value[field].trim();
+        };
+        const effect = { name: text('name'), scope: value.scope, target: text('target'), description: text('description'),
+            source: text('source'), expires_when: text('expires_when'), status: value.status || 'active',
+            evidence: optionalText(value.evidence), uncertain: value.uncertain === true };
+        if (effect.evidence.length > 1500 || (effect.status === 'ended' && !effect.evidence)) throw new Error('invalid_effects');
+        const identity = key(effect);
+        if (used.has(identity)) throw new Error('invalid_effects');
+        used.add(identity);
+        const old = previous.filter(entry => key(entry) === identity);
+        effect.id = old.length === 1 ? old[0].id : `bbe-${nextId++}`;
+        return effect;
+    });
+}
+
+export function isMapEffectApplicable(effect, raw, playerName = '') {
+    return effect.scope === 'scene' ? holderKey(effect.target) === holderKey(raw.schematic_name)
+        : effect.scope === 'zone' ? raw.zones.some(zone => holderKey(zone.name) === holderKey(effect.target))
+            : (playerName && holderKey(effect.target) === holderKey(playerName))
+                || raw.zones.some(zone => (zone.characters || []).some(char => holderKey(char.name) === holderKey(effect.target)));
+}
+
+export function reconcileMapEffects(next, previous = null, playerName = '') {
+    const applicable = effect => isMapEffectApplicable(effect, next, playerName);
+    const effects = (next.effects || []).filter(applicable);
+    for (const old of previous?.effects || []) {
+        if (old.status !== 'active' || !applicable(old) || effects.some(effect => effect.id === old.id)) continue;
+        // Omission is not termination. Scans must report an ended effect with evidence.
+        effects.push({ ...old });
+    }
+    if (effects.length > 16) throw new Error('invalid_effects');
+    return { ...next, effects };
+}
+
+export function getMapEffectChanges(previous, next) {
+    const old = new Map((previous?.effects || []).map(effect => [effect.id, effect]));
+    const current = new Map((next?.effects || []).map(effect => [effect.id, effect]));
+    const changes = [];
+    for (const id of new Set([...old.keys(), ...current.keys()])) {
+        const before = old.get(id), after = current.get(id);
+        const fields = ['name', 'scope', 'target', 'description', 'source', 'expires_when', 'status', 'evidence', 'uncertain'];
+        if (before && after && fields.every(field => before[field] === after[field])) continue;
+        changes.push({ before, after, action: !after ? 'removed' : !before ? 'added'
+            : after.status === 'ended' && before.status !== 'ended' ? 'ended' : 'changed' });
+    }
+    return changes;
+}
+
+export function requiresEffectReview(previous, next) {
+    return getMapEffectChanges(previous, next).some(change => change.after
+        && (change.after.uncertain || !change.after.evidence));
+}
+
+export function buildMapEffectsContext(raw, playerName = '') {
+    const effects = (raw?.effects || []).filter(effect => effect.status === 'active' && isMapEffectApplicable(effect, raw, playerName));
+    if (!effects.length) return '';
+    return `\n[Temporary scene effects: ${effects.map(effect => `${effect.name}; target (${effect.scope}): ${effect.target}; description: ${effect.description}; source: ${effect.source}; ends when: ${effect.expires_when}`).join(' | ')}. These are narrative circumstances, not automatic damage, penalties, rolls, or permission to act for the player.]`;
+}
+
 export function requiresObjectReview(previous, next, playerName = '') {
     if (hasLegacyObjectMemory(previous)) return true;
     const changed = getMapChanges(previous, next).filter(change => change.type === 'object');
@@ -229,6 +299,7 @@ export function normalizeMapData(input, previousRaw = null) {
         zones,
         ...(input.unlocated_objects !== undefined ? { unlocated_objects: unlocated } : {}),
         ...(input.object_memory_scope === 'scene' ? { object_memory_scope: 'scene' } : {}),
+        ...(input.effects !== undefined ? { effects: normalizeEffects(input.effects, previousRaw?.effects) } : {}),
     };
 }
 
