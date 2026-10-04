@@ -142,5 +142,5 @@ scan, update, save or cache chat data. Its result does not depend on the manual
 macro setting; `{{bb_map}}` itself remains empty when manual placement is off.
 
 Consumers should check API compatibility and treat absent/empty context as
-optional. Enhance and VNE preview branches use independent, default-off context
+optional. Enhance and VNE use independent, default-off context
 switches. Enhance travel receives explicit context from the map action instead.

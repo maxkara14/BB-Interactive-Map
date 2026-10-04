@@ -4,9 +4,9 @@
 
 ## Русский
 
-### 2.0 — предрелиз, `map_test`
+### 2.0.0 — 4 октября 2026
 
-Изменения относительно **1.1.0 в `main`** (базовый коммит `bfa2c73`). Дата финального выпуска пока не назначена; manifest остаётся 1.1.0 до переноса в основную ветку.
+Изменения относительно **1.1.0**.
 
 #### Карта и интерфейс
 
@@ -40,7 +40,7 @@
 - Профили Connection Manager дополнены к основному подключению и Custom API. Лимит ответа карты увеличен до 10 000 токенов.
 - Сохранены автоматическая вставка памяти и ручной макрос `{{bb_map}}`; добавлен API чтения карты активного чата `BBInteractiveMap` v1.
 - Переходы через Enhance Gen используют его подключение и настройки текста, с отменой, возвратом исходного черновика и защитой от позднего результата.
-- Совместимые тестовые ветки Enhance и VNE добавляют собственные необязательные переключатели контекста карты для генерации текста и вариантов ответа. Эти изменения находятся в соответствующих расширениях.
+- Enhance и VNE добавляют собственные необязательные переключатели контекста карты для генерации текста и вариантов ответа. Эти изменения находятся в соответствующих расширениях.
 
 ### 1.1.0 — основная версия до обновления
 
@@ -48,9 +48,9 @@
 
 ## English
 
-### 2.0 — preview, `map_test`
+### 2.0.0 — October 4, 2026
 
-Changes from **1.1.0 on `main`** (baseline commit `bfa2c73`). The final release date is pending; the manifest remains 1.1.0 until the build moves to the main branch.
+Changes from **1.1.0**.
 
 #### Map and interface
 
@@ -84,7 +84,7 @@ Changes from **1.1.0 on `main`** (baseline commit `bfa2c73`). The final release 
 - Connection Manager profiles join the current connection and Custom API. Map output allowance increases to 10,000 tokens.
 - Automatic memory injection and the manual `{{bb_map}}` macro remain; a current-chat read-only `BBInteractiveMap` v1 API is added.
 - Enhance Gen travel uses Enhance's connection and writing settings, with cancellation, original-draft restoration and stale-result protection.
-- Compatible Enhance and VNE preview branches add optional map-context switches for writing and response options. Those changes live in the respective extensions.
+- Enhance and VNE add optional map-context switches for writing and response options. Those changes live in the respective extensions.
 
 ### 1.1.0 — main version before the update
 
