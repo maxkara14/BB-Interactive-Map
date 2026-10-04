@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { layoutMiniMap, layoutMapPassage } from '../map-topology-view.js';
+import { layoutMiniMap, layoutMapPassage, getMapVisualChanges } from '../map-topology-view.js';
 
 test('mini layout keeps direction/status, bounds nodes and limits direct neighbors without mutation', () => {
     const raw = { player_place_id: 'home', zones: ['home','a','b','c','d','e'].map(id => ({ id, name: id, kind: 'room' })),
@@ -22,4 +22,14 @@ test('mini layout keeps direction/status, bounds nodes and limits direct neighbo
     assert.equal(layoutMiniMap({ ...raw, player_place_id: null }).nodes.length, 0);
     assert.equal(layoutMiniMap({ ...raw, connections: [] }).nodes.length, 1);
     assert.ok(layoutMiniMap({ ...raw, connections: raw.connections.slice(0,2) }).height < 150);
+});
+
+test('visual changes distinguish new and changed places without modifying maps', () => {
+    const before = { zones: [{ id: 'a', name: 'Hall', threat_level: 'safe' }] };
+    const after = { zones: [{ id: 'a', name: 'Hall', threat_level: 'danger' }, { id: 'b', name: 'Garden' }] };
+    const snapshot = JSON.stringify([before, after]);
+    assert.equal(getMapVisualChanges(after, before).get('a'), 'is-changed');
+    assert.equal(getMapVisualChanges(after, before).get('b'), 'is-new');
+    assert.equal(getMapVisualChanges(before, before).get('a'), '');
+    assert.equal(JSON.stringify([before, after]), snapshot);
 });

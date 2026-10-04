@@ -497,3 +497,33 @@
 .bb-topology-more { margin-top: 10px; font-size: 12px; color: #a0b3b5; }
 .bb-topology-more > summary { cursor: pointer; width: fit-content; }
 .bb-topology-more > summary:focus-visible { outline: 2px solid #79d7d3; outline-offset: 3px; }
+/* Quiet map motion: persistent current-place cue, routes on interaction. */
+.bb-topology-shape, .bb-map-widget-place { transition: stroke .35s ease, border-color .35s ease, background-color .35s ease, fill .35s ease; }
+.bb-topology-shape.is-safe { stroke: #72ab91; }
+.bb-topology-shape.is-tension { stroke: #d8b46a; }
+.bb-topology-shape.is-danger { stroke: #d77d7d; }
+.bb-topology-shape.is-selected { stroke-width: 2.4; }
+.bb-map-widget-place.is-safe { border-color: #72ab91; }
+.bb-map-widget-place.is-tension { border-color: #d8b46a; }
+.bb-map-widget-place.is-danger { border-color: #d77d7d; }
+.bb-topology-current { animation: bb-map-breathe 4s ease-in-out infinite; }
+.bb-map-widget-place.is-current::before { animation: bb-map-breathe 4s ease-in-out infinite; }
+.bb-topology-edge.is-line.is-route, .bb-topology-edge.is-line.is-hover,
+.bb-map-widget-edge.is-line.is-hover {
+    stroke: #79d7d3; stroke-dasharray: 6 5; animation: bb-map-flow 1.8s linear infinite;
+}
+.bb-topology-edge.is-line.is-reverse, .bb-map-widget-edge.is-line.is-reverse { animation-direction: reverse; }
+.bb-topology-shape.is-new, .bb-map-widget-place.is-new { animation: bb-map-appear .5s ease-out both; }
+.bb-topology-shape.is-changed { animation: bb-map-zone-update 1.4s ease-out; }
+.bb-map-widget-place.is-changed { animation: bb-map-place-update 1.4s ease-out; }
+@keyframes bb-map-flow { to { stroke-dashoffset: -22; } }
+@keyframes bb-map-breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; filter: drop-shadow(0 0 3px #79d7d3); } }
+@keyframes bb-map-appear { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bb-map-zone-update { 0%, 35% { stroke-width: 3; filter: drop-shadow(0 0 4px #79d7d355); } }
+@keyframes bb-map-place-update { 0%, 35% { box-shadow: 0 0 0 2px #79d7d344, 0 0 12px #79d7d333; } }
+.bb-map-motion-off, .bb-map-motion-off *, .bb-map-motion-off *::before { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+    .bb-topology *, .bb-topology *::before, .bb-map-widget *, .bb-map-widget *::before { animation: none !important; transition: none !important; }
+}
+
+.bb-topology-edge.is-line.is-new:not(.is-route):not(.is-hover), .bb-map-widget-edge.is-new:not(.is-hover) { animation: bb-map-appear .5s ease-out both; }

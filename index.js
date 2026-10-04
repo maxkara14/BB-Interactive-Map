@@ -4,7 +4,7 @@ import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, s
 import { extension_settings } from '../../../extensions.js';
 import { normalizeGraphMapData, readMapState, getMapRoute, requiresTopologyReview, normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
-import { createMapTopologyView, layoutMiniMap, layoutMapPassage } from './map-topology-view.js';
+import { createMapTopologyView, layoutMiniMap, layoutMapPassage, getMapVisualChanges } from './map-topology-view.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
@@ -26,6 +26,7 @@ if (!['main', 'profile', 'custom'].includes(settings.generationSource)) {
 settings.uiLanguage ??= 'auto';
 settings.connectionProfileId ??= '';
 settings.showWidget ??= true;
+settings.mapAnimations ??= true;
 settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
 settings.autoApply ??= false;
@@ -48,6 +49,7 @@ let autoStatus = 'idle';
 let chatMapLinks = null;
 let mapTravelController = null;
 let mapTopologyView = null;
+let widgetMapSnapshot = null;
 
 function removeMapOverlay() {
     mapTopologyView?.destroy(); mapTopologyView = null;
@@ -676,7 +678,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
     const focusBefore = document.activeElement, mode = getMapMode(chat_metadata);
     const overlay = document.createElement('div'); overlay.id = 'bb-map-overlay'; overlay.className = 'bb-map-overlay';
     overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true'); overlay.setAttribute('aria-label', data.schematic_name);
-    overlay.innerHTML = `<div class="bb-map-modal bb-map-graph-modal">
+    overlay.innerHTML = `<div class="bb-map-modal bb-map-graph-modal${settings.mapAnimations ? '' : ' bb-map-motion-off'}">
         <header class="bb-map-header-container"><div class="bb-map-title">${escapeHtml(data.schematic_name)}</div>
         <div class="bb-graph-scope">${data.scope === 'scene' ? tr('Текущая сцена', 'Current scene') : tr('Окрестности', 'Surroundings')}</div>
         <small>${tr('Вы здесь:', 'You are here:')} ${escapeHtml(data.zones.find(zone => zone.id === data.player_place_id)?.name || tr('Положение неизвестно', 'Position unknown'))}</small>
@@ -687,7 +689,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
         ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
         <div class="bb-map-controls">${!isSavedMap ? `<button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn">${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>` : ''}
         <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button><button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
-    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), onSelect: place => {
+    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, previous: !isSavedMap ? expectedMap?.raw : null, onSelect: place => {
         if (!isSavedMap || mode !== 'game') return;
         const route = getMapRoute(data, place.id), panel = overlay.querySelector('#bb-map-travel');
         if (!route || route.places.length < 2) { panel.className = ''; panel.replaceChildren(); return; }
@@ -1303,6 +1305,12 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         renderMapWidget();
     });
+    checkbox(general, tr('Анимации карты', 'Map animations'), settings.mapAnimations, checked => {
+        settings.mapAnimations = checked;
+        saveSettingsDebounced();
+        mapTopologyView?.setAnimations(checked);
+        renderMapWidget();
+    });
     checkbox(general, tr('Подсвечивать упоминания карты в чате', 'Highlight map mentions in chat'), settings.highlightMentions, checked => {
         settings.highlightMentions = checked;
         saveSettingsDebounced();
@@ -1538,14 +1546,16 @@ function setupExtensionSettings(rebuild = false) {
     if (!existing) target.append(panel);
 }
 
-function graphWidgetHtml(raw) {
+function graphWidgetHtml(raw, changes = new Map()) {
     const layout = layoutMiniMap(raw);
     if (!layout.nodes.length) return '<small>' + tr('Положение неизвестно', 'Position unknown') + '</small>';
     const byId = new Map(layout.nodes.map(node => [node.id, node]));
     const lines = layout.edges.map(edge => {
         const points = layoutMapPassage(byId.get(edge.from), byId.get(edge.to), layout.nodes, 256);
-        const cls = 'bb-map-widget-edge is-' + edge.status;
-        let html = '<path class="' + cls + '" data-connection-id="' + edge.id + '" d="' + points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ') + '"/>';
+        const cls = 'bb-map-widget-edge is-' + edge.status + ' ' + (changes.get(edge.id) || '');
+        const neighbor = edge.from === raw.player_place_id ? edge.to : edge.from;
+        const traversable = edge.status === 'confirmed' && (edge.direction === 'both' || edge.from === raw.player_place_id);
+        let html = '<path class="' + cls + ' is-line' + (edge.from !== raw.player_place_id ? ' is-reverse' : '') + '" data-neighbor-id="' + neighbor + '" data-traversable="' + traversable + '" data-connection-id="' + edge.id + '" d="' + points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ') + '"/>';
         const arrow = (tip, previous) => {
             const length = Math.hypot(tip.x - previous.x, tip.y - previous.y);
             const ux = (tip.x - previous.x) / length, uy = (tip.y - previous.y) / length;
@@ -1563,7 +1573,7 @@ function graphWidgetHtml(raw) {
             const current = place.id === raw.player_place_id;
             const edge = layout.edges.find(edge => edge.from === place.id || edge.to === place.id);
             const title = place.name + (current ? ' · ' + tr('Вы здесь', 'You are here') : edge ? ' · ' + edge.name + (edge.status === 'confirmed' ? '' : ' · ' + topologyValueLabel(edge.status)) : '');
-            const attrs = ' class="bb-map-widget-place is-' + place.kind + (current ? ' is-current' : '') + '" title="' + escapeHtml(title) + '" style="left:' + place.x / 256 * 100 + '%;top:' + place.y / layout.height * 100 + '%;width:' + place.width / 256 * 100 + '%;height:' + place.height / layout.height * 100 + '%"';
+            const attrs = ' class="bb-map-widget-place is-' + place.kind + ' is-' + place.threat_level + ' ' + (changes.get(place.id) || '') + (current ? ' is-current' : '') + '" title="' + escapeHtml(title) + '" style="left:' + place.x / 256 * 100 + '%;top:' + place.y / layout.height * 100 + '%;width:' + place.width / 256 * 100 + '%;height:' + place.height / layout.height * 100 + '%"';
             return current ? '<span' + attrs + '><span>' + escapeHtml(place.name) + '</span></span>'
                 : '<button type="button" data-place-id="' + place.id + '"' + attrs + '><span>' + escapeHtml(place.name) + '</span></button>';
         }).join('') + '</div>' + (layout.extra ? '<small>+' + layout.extra + ' ' + tr('на полной карте', 'on the full map') + '</small>' : '');
@@ -1585,7 +1595,11 @@ function renderMapWidget() {
     const threatText = danger ? tr('Опасность', 'Danger') : tension ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
     const widget = document.createElement('section');
     widget.id = 'bb-map-widget';
-    widget.className = `bb-map-widget bb-map-widget-${level}`;
+    widget.className = `bb-map-widget bb-map-widget-${level}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;
+    const widgetChat = SillyTavern.getContext();
+    const previous = widgetMapSnapshot && isSameChat(widgetMapSnapshot.chat, widgetChat) ? widgetMapSnapshot.raw : raw;
+    const visualChanges = getMapVisualChanges(raw, previous);
+    widgetMapSnapshot = { chat: { chatId: widgetChat.chatId, characterId: widgetChat.characterId, groupId: widgetChat.groupId, chatMetadata: widgetChat.chatMetadata }, raw: structuredClone(raw) };
     widget.setAttribute('aria-label', tr('Виджет карты', 'Map widget'));
     widget.innerHTML = `
         <div class="bb-map-widget-header" tabindex="0" aria-label="${tr('Переместить виджет карты стрелками', 'Move map widget with arrow keys')}">
@@ -1598,7 +1612,7 @@ function renderMapWidget() {
         </div>
         <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
             <div class="bb-map-widget-meta"><span>${escapeHtml(raw.schematic_name)}</span><span class="bb-map-widget-threat">${threatText}</span></div>
-            ${raw.layout === 'graph' ? graphWidgetHtml(raw) : `            <div class="bb-map-widget-grid" aria-label="${tr('Схема зон', 'Zone grid')}">
+            ${raw.layout === 'graph' ? graphWidgetHtml(raw, visualChanges) : `            <div class="bb-map-widget-grid" aria-label="${tr('Схема зон', 'Zone grid')}">
                 ${WIDGET_POSITIONS.map(position => {
                     const zone = zones.get(position);
                     const name = zone?.name || '';
@@ -1645,6 +1659,15 @@ function renderMapWidget() {
         saveSettingsDebounced();
         renderMapWidget();
     };
+    for (const button of widget.querySelectorAll('.bb-map-widget-place[data-place-id]')) {
+        const highlight = active => {
+            for (const line of widget.querySelectorAll('.bb-map-widget-edge.is-line')) {
+                line.classList.toggle('is-hover', active && line.dataset.neighborId === button.dataset.placeId && line.dataset.traversable === 'true');
+            }
+        };
+        button.onpointerenter = button.onfocus = () => highlight(true);
+        button.onpointerleave = button.onblur = () => highlight(false);
+    }
     widget.querySelector('.bb-map-widget-open').onclick = () => {
         const current = getMapDataForCurrentChat();
         if (current?.raw) showRadarModal(current.raw, true);

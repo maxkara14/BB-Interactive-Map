@@ -31,7 +31,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             var generateQuietPrompt = async params => { calls.push({ source: 'main', prompt: params.quietPrompt, tokens: params.responseLength }); return JSON.stringify(response); };
             var fetch = async (url, options) => { const body = JSON.parse(options.body); calls.push({ source: 'custom', prompt: body.messages[1].content, tokens: body.max_tokens }); return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify(response) } }] }) }; };
             ${strip(read('index.js').split('jQuery(async () => {')[0])}
-            injectCurrentMapContext = () => {}; setupExtensionSettings = () => {};
+            var buildSettings = setupExtensionSettings; injectCurrentMapContext = () => {}; setupExtensionSettings = () => {};
             var oldGrid = createSavedMap(normalizeMapData({ schematic_name: 'Поместье', zones: [{ position: 'center', name: 'Зал', poi: ['Ключ'] }] }));
             chat_metadata.bb_map_data = oldGrid;
         ` });
@@ -192,6 +192,59 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.evaluate(() => { settings.uiLanguage = 'ru'; chat_metadata.bb_map_data = miniHub; renderMapWidget(); });
         await page.locator('.bb-map-widget-place[data-place-id]').first().click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Забрызганный гравий/);
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.evaluate(() => {
+            removeMapOverlay(); settings.mapAnimations = true;
+            const raw = structuredClone(miniHub.raw); raw.zones[1].threat_level = 'tension'; raw.zones[2].threat_level = 'danger';
+            chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
+        });
+        assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 2);
+        await page.evaluate(() => renderMapWidget());
+        assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 0);
+        const animation = locator => locator.evaluate(node => getComputedStyle(node).animationName);
+        assert.equal(await animation(page.locator('.bb-map-widget-place.is-current').locator('span')), 'none');
+        assert.equal(await page.locator('.bb-map-widget-place.is-current').evaluate(node => getComputedStyle(node, '::before').animationName), 'bb-map-breathe');
+        assert.equal(await page.locator('.bb-map-widget-place.is-tension').evaluate(node => getComputedStyle(node).borderTopColor), 'rgb(216, 180, 106)');
+        assert.equal(await page.locator('.bb-map-widget-place.is-danger').evaluate(node => getComputedStyle(node).borderTopColor), 'rgb(215, 125, 125)');
+        const neighbor = page.locator('.bb-map-widget-place[data-place-id]').first();
+        await neighbor.hover();
+        const flowing = page.locator('.bb-map-widget-edge.is-line.is-hover');
+        assert.equal(await animation(flowing), 'bb-map-flow');
+        const offset = await flowing.evaluate(node => getComputedStyle(node).strokeDashoffset);
+        await page.waitForTimeout(180);
+        assert.notEqual(await flowing.evaluate(node => getComputedStyle(node).strokeDashoffset), offset);
+        await page.locator('.bb-map-widget-place.is-danger').hover();
+        assert.equal(await page.locator('.bb-map-widget-edge.is-hover').count(), 0); // Incoming-only passage.
+        await page.locator('.bb-map-widget-place[data-place-id]').nth(2).hover();
+        assert.equal(await page.locator('.bb-map-widget-edge.is-hover').count(), 0); // Uncertain passage.
+        await page.locator('.bb-map-widget-place[data-place-id]').nth(3).hover();
+        assert.equal(await page.locator('.bb-map-widget-edge.is-hover').count(), 0); // Blocked passage.
+        if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'motion-mini.png') });
+        await page.evaluate(() => { settings.mapAnimations = false; renderMapWidget(); });
+        await page.locator('.bb-map-widget-place[data-place-id]').first().hover();
+        assert.equal(await animation(page.locator('.bb-map-widget-edge.is-hover')), 'none');
+        assert.equal(await page.locator('.bb-map-widget-place.is-current').evaluate(node => getComputedStyle(node, '::before').animationName), 'none');
+        await page.evaluate(() => { settings.mapAnimations = true; renderMapWidget(); });
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.locator('.bb-map-widget-place[data-place-id]').first().hover();
+        assert.equal(await animation(page.locator('.bb-map-widget-edge.is-hover')), 'none');
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.locator('.bb-map-widget-place[data-place-id]').first().click();
+        assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'bb-map-flow');
+        assert.equal(await animation(page.locator('.bb-topology-current')), 'bb-map-breathe');
+        assert.equal(await page.locator('.bb-topology-shape.is-danger').evaluate(node => getComputedStyle(node).stroke), 'rgb(215, 125, 125)');
+        await page.evaluate(() => buildSettings(true));
+        const toggle = page.locator('label').filter({ hasText: /^Анимации карты$/ }).locator('input[type="checkbox"]');
+        await toggle.evaluate(node => { node.checked = false; node.dispatchEvent(new Event('change', { bubbles: true })); });
+        assert.equal(await page.evaluate(() => settings.mapAnimations), false);
+        assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'none');
+        await toggle.evaluate(node => { node.checked = true; node.dispatchEvent(new Event('change', { bubbles: true })); });
+        assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'bb-map-flow');
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'none');
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.waitForTimeout(600);
+        if (process.argv[3]) await page.locator('.bb-map-graph-modal').screenshot({ path: path.join(process.argv[3], 'motion-full.png') });
         assert.deepEqual(errors, []);
         console.log('Graph providers, scopes, editor places/passages, widget, route drafts, ambiguity/auto-save, unknown position, stale chat and responsive checks passed.');
     } finally { await browser.close(); }

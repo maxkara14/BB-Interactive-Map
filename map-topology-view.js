@@ -1,6 +1,11 @@
 import { getMapRoute, poiName } from './map-state.js';
 
 // Compact schematic: current place and up to four directly connected places.
+export function getMapVisualChanges(raw, previous) {
+    const places = new Map([...(previous?.zones || []), ...(previous?.connections || [])].map(place => [place.id, place]));
+    return new Map([...raw.zones, ...(raw.connections || [])].map(place => [place.id, !places.has(place.id) ? 'is-new' : JSON.stringify(place) !== JSON.stringify(places.get(place.id)) ? 'is-changed' : '']));
+}
+
 export function layoutMiniMap(raw) {
     const current = raw.zones.find(zone => zone.id === raw.player_place_id);
     if (!current) return { nodes: [], edges: [], height: 0, extra: 0 };
@@ -100,9 +105,9 @@ export function layoutMapPassage(p, q, nodes, width) {
         { x: channel, y: q.y }, { x: q.x + Math.sign(channel - q.x) * q.width / 2, y: q.y }];
 }
 
-export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {} } = {}) {
+export function createMapTopologyView(raw, { language = 'ru', animations = true, previous = null, onSelect = () => {} } = {}) {
     const tr = (ru, en) => language === 'ru' ? ru : en;
-    const element = document.createElement('section'); element.className = 'bb-topology';
+    const element = document.createElement('section'); element.className = 'bb-topology' + (animations ? '' : ' bb-map-motion-off');
     const field = document.createElement('div'); field.className = 'bb-topology-field';
     field.setAttribute('aria-label', tr('Места и проходы', 'Places and passages'));
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -118,6 +123,8 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
     const detail = document.createElement('section'); detail.className = 'bb-topology-detail'; detail.setAttribute('aria-live', 'polite');
     element.append(field, legend, detail);
     let selected = raw.player_place_id || raw.zones[0].id;
+    const changes = getMapVisualChanges(raw, previous);
+    let initialDraw = true;
     const kinds = { room: ['Помещение', 'Room'], outdoor: ['Открытое место', 'Outdoors'], passage: ['Проход', 'Passage'],
         area: ['Участок', 'Area'], unknown: ['Тип неизвестен', 'Unknown type'] };
     const passageKinds = { door: ['Дверь', 'Door'], path: ['Тропинка', 'Path'], stairs: ['Ступени', 'Stairs'], opening: ['Проём', 'Opening'], passage: ['Проход', 'Passage'], unknown: ['Связь', 'Link'] };
@@ -151,7 +158,7 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
             const segments = path.slice(1).map((b, i) => ({ a: path[i], b, length: Math.hypot(b.x - path[i].x, b.y - path[i].y) }));
             const longest = [...segments].sort((a, b) => b.length - a.length)[0], span = longest.length;
             const active = route?.connections.includes(edge.id);
-            make('path', { d: path.map((point, i) => `${i ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '), class: `bb-topology-edge is-${edge.status}${active ? ' is-route' : ''}`, 'data-connection-id': edge.id });
+            make('path', { d: path.map((point, i) => `${i ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '), class: `bb-topology-edge is-line is-${edge.status}${initialDraw ? ' ' + (changes.get(edge.id) || '') : ''}${active ? ' is-route' : ''}${active && route.places[route.connections.indexOf(edge.id)] !== edge.from ? ' is-reverse' : ''}`, 'data-connection-id': edge.id });
             if (edge.direction === 'forward') {
                 const last = segments.at(-1), ux = (last.b.x - last.a.x) / last.length, uy = (last.b.y - last.a.y) / last.length, ex = last.b.x, ey = last.b.y;
                 make('path', { d: `M ${ex - ux * 10 - uy * 4} ${ey - uy * 10 + ux * 4} L ${ex} ${ey} L ${ex - ux * 10 + uy * 4} ${ey - uy * 10 - ux * 4}`,
@@ -168,7 +175,7 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
         }
         for (const node of layout.nodes) {
             const x = node.x - node.width / 2, y = node.y - node.height / 2;
-            const cls = `bb-topology-shape is-${node.kind}${node.id === selected ? ' is-selected' : ''}`;
+            const cls = `bb-topology-shape is-${node.kind} is-${node.threat_level}${node.id === selected ? ' is-selected' : ''}${initialDraw ? ' ' + changes.get(node.id) : ''}`;
             if (node.kind === 'outdoor') make('path', { class: cls,
                 d: `M ${x + 12} ${y + 22} Q ${x + node.width * .34} ${y - 5} ${x + node.width * .7} ${y + 7} Q ${x + node.width + 6} ${y + 16} ${x + node.width - 4} ${node.y} Q ${x + node.width + 2} ${y + node.height + 7} ${node.x} ${y + node.height - 4} Q ${x - 5} ${y + node.height + 7} ${x + 2} ${node.y} Z` });
             else make('rect', { x, y, width: node.width, height: node.height, rx: node.kind === 'passage' ? 3 : 9, class: cls });
@@ -184,6 +191,16 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
             }
             if (node.id === raw.player_place_id) { const current = document.createElement('small'); current.className = 'bb-topology-current'; current.textContent = tr('● Вы здесь', '● You are here'); button.append(current); }
             if (node.uncertain) { const uncertain = document.createElement('small'); uncertain.textContent = tr('Не подтверждено', 'Unconfirmed'); button.append(uncertain); }
+            const highlight = active => {
+                const hoverRoute = active ? getMapRoute(raw, node.id) : null;
+                for (const line of svg.querySelectorAll('.is-line')) {
+                    const index = hoverRoute?.connections.indexOf(line.dataset.connectionId) ?? -1;
+                    line.classList.toggle('is-hover', index >= 0);
+                    if (!line.classList.contains('is-route')) line.classList.toggle('is-reverse', index >= 0 && hoverRoute.places[index] !== raw.connections.find(edge => edge.id === line.dataset.connectionId).from);
+                }
+            };
+            button.onpointerenter = button.onfocus = () => highlight(true);
+            button.onpointerleave = button.onblur = () => highlight(false);
             button.onclick = () => { selected = node.id; draw(); places.querySelector(`[data-place-id="${node.id}"]`)?.focus({ preventScroll: true }); onSelect(node, getMapRoute(raw, node.id)); };
             places.append(button);
         }
@@ -242,11 +259,15 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
             paragraph(tr('Проход', 'Passage'), `${edge.name} · ${other.name} · ${tr(...states[edge.status])}${edge.direction === 'forward' ? ` · ${byId.get(edge.from).name} → ${byId.get(edge.to).name}` : ''}${edge.evidence ? ' · ' + edge.evidence : ''}`, extra);
         }
         if (extra.querySelector('p')) detail.append(extra);
+        initialDraw = false;
         if (focusedId) places.querySelector(`[data-place-id="${focusedId}"]`)?.focus({ preventScroll: true });
         else if (focusedMore) detail.querySelector('summary')?.focus({ preventScroll: true });
     }
     const observer = new ResizeObserver(draw); observer.observe(field);
-    return { element, refresh: draw, select: id => {
+    return { element, refresh: draw, setAnimations: enabled => {
+        element.classList.toggle('bb-map-motion-off', !enabled);
+        element.closest('.bb-map-graph-modal')?.classList.toggle('bb-map-motion-off', !enabled);
+    }, select: id => {
         if (!raw.zones.some(zone => zone.id === id)) return;
         selected = id; draw(); onSelect(raw.zones.find(zone => zone.id === id));
     }, destroy: () => observer.disconnect() };
