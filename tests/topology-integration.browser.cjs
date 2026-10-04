@@ -54,7 +54,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.locator('#bb-map-save-btn').click();
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.version), 3);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.previous.raw === oldGrid.raw), true);
-        assert.equal(await page.locator('.bb-map-widget-place[data-place-id]').count(), 1);
+        assert.equal(await page.locator('.bb-map-widget-place[data-place-id]').count(), 2);
         assert.match(await page.locator('.bb-map-widget-content').innerText(), /Поместье Бабочки — северное крыло/);
         await page.getByRole('button', { name: 'Сад', exact: false }).filter({ has: page.locator('small', { hasText: 'Открытое место' }) }).click();
         assert.match(await page.locator('#bb-map-travel').innerText(), /Зал → Сад/);
@@ -71,7 +71,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             fs.mkdirSync(process.argv[3], { recursive: true });
             await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-one.png') });
         }
-        await page.locator('.bb-map-widget-place[data-place-id]').click();
+        await page.locator('.bb-map-widget-place[data-place-id]').first().click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Галерея/);
         await page.locator('#bb-map-edit-btn').click();
         // A place/connection can be added without mutating the saved map.
@@ -167,7 +167,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
                 assert.ok(node.width < 110 && node.height < 52);
             }
             assert.equal(await page.locator('.bb-map-widget-edge[data-connection-id]').count(), 4);
-            assert.equal(await page.locator('.bb-map-widget-arrow').count(), 4);
+            assert.equal(await page.locator('.bb-map-widget-arrow').count(), 1);
             assert.equal(await page.locator('.bb-map-widget-arrow.is-blocked').count(), 0);
             assert.doesNotMatch(await page.locator('.bb-map-widget').innerText(), /Подтвержд|Confirmed/);
             if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-' + width + '.png') });
@@ -178,7 +178,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
         });
         assert.equal(await page.locator('.bb-map-widget-place').count(), 3);
-        assert.equal(await page.locator('.bb-map-widget-arrow').count(), 3);
+        assert.equal(await page.locator('.bb-map-widget-arrow').count(), 1);
         if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'mini-two.png') });
         await page.evaluate(() => { settings.uiLanguage = 'en'; renderMapWidget(); });
         assert.match(await page.locator('.bb-map-widget-open').innerText(), /OPEN MAP/);
@@ -201,11 +201,20 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 2);
         await page.evaluate(() => renderMapWidget());
         assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 0);
+        assert.equal(await page.locator('.bb-map-widget-current-label').innerText(), 'Вы здесь');
         const animation = locator => locator.evaluate(node => getComputedStyle(node).animationName);
         assert.equal(await animation(page.locator('.bb-map-widget-place.is-current').locator('span')), 'none');
         assert.equal(await page.locator('.bb-map-widget-place.is-current').evaluate(node => getComputedStyle(node, '::before').animationName), 'bb-map-breathe');
-        assert.equal(await page.locator('.bb-map-widget-place.is-tension').evaluate(node => getComputedStyle(node).borderTopColor), 'rgb(216, 180, 106)');
-        assert.equal(await page.locator('.bb-map-widget-place.is-danger').evaluate(node => getComputedStyle(node).borderTopColor), 'rgb(215, 125, 125)');
+        assert.equal(await page.locator('.bb-map-widget-shape.is-tension').evaluate(node => getComputedStyle(node).stroke), 'rgb(216, 180, 106)');
+        assert.equal(await page.locator('.bb-map-widget-shape.is-danger').evaluate(node => getComputedStyle(node).stroke), 'rgb(215, 125, 125)');
+        for (const [level, duration] of [['safe','14s'], ['tension','6s'], ['danger','2s']]) {
+            const shape = page.locator('.bb-map-widget-shape.is-' + level).first();
+            assert.equal(await shape.evaluate(node => getComputedStyle(node).animationDuration), duration);
+            assert.equal(await animation(shape), 'bb-map-perimeter');
+        }
+        const perimeter = page.locator('.bb-map-widget-shape.is-tension');
+        const perimeterOffset = await perimeter.evaluate(node => getComputedStyle(node).strokeDashoffset);
+        await page.waitForFunction(before => getComputedStyle(document.querySelector('.bb-map-widget-shape.is-tension')).strokeDashoffset !== before, perimeterOffset, { timeout: 3000 });
         const neighbor = page.locator('.bb-map-widget-place[data-place-id]').first();
         await neighbor.hover();
         const flowing = page.locator('.bb-map-widget-edge.is-line.is-hover');
@@ -232,19 +241,69 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.locator('.bb-map-widget-place[data-place-id]').first().click();
         assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'bb-map-flow');
         assert.equal(await animation(page.locator('.bb-topology-current')), 'bb-map-breathe');
+        assert.equal(await page.locator('.bb-topology-arrow.is-route').count(), 1);
+        assert.equal(await page.locator('.bb-topology-arrow.is-route').getAttribute('data-destination-id'), await page.locator('.bb-topology-place[aria-pressed="true"]').getAttribute('data-place-id'));
         assert.equal(await page.locator('.bb-topology-shape.is-danger').evaluate(node => getComputedStyle(node).stroke), 'rgb(215, 125, 125)');
         await page.evaluate(() => buildSettings(true));
         const toggle = page.locator('label').filter({ hasText: /^Анимации карты$/ }).locator('input[type="checkbox"]');
         await toggle.evaluate(node => { node.checked = false; node.dispatchEvent(new Event('change', { bubbles: true })); });
         assert.equal(await page.evaluate(() => settings.mapAnimations), false);
         assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'none');
+        assert.equal(await animation(page.locator('.bb-topology-shape.is-tension')), 'none');
         await toggle.evaluate(node => { node.checked = true; node.dispatchEvent(new Event('change', { bubbles: true })); });
         assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'bb-map-flow');
+        assert.equal(await animation(page.locator('.bb-topology-shape.is-tension')), 'bb-map-perimeter');
         await page.emulateMedia({ reducedMotion: 'reduce' });
         assert.equal(await animation(page.locator('.bb-topology-edge.is-line.is-route')), 'none');
         await page.emulateMedia({ reducedMotion: 'no-preference' });
         await page.waitForTimeout(600);
         if (process.argv[3]) await page.locator('.bb-map-graph-modal').screenshot({ path: path.join(process.argv[3], 'motion-full.png') });
+        // A second-hop zone appears on both maps with its intermediate passage preserved.
+        await page.evaluate(() => {
+            removeMapOverlay();
+            const raw = normalizeGraphMapData({ layout: 'graph', scope: 'scene', schematic_name: 'Карантинный двор', player_place_id: 'sink',
+                zones: [{ id: 'sink', name: 'Каменный умывальник', kind: 'area' }, { id: 'gravel', name: 'Забрызганный гравий', kind: 'outdoor', threat_level: 'tension' },
+                    { id: 'cornice', name: 'Карниз веранды', kind: 'area' }, { id: 'kitchen', name: 'Кухонный переход', kind: 'passage' }],
+                connections: [{ from: 'gravel', to: 'sink', name: 'Тропинка', kind: 'path', direction: 'both', status: 'confirmed', evidence: 'Fixture' },
+                    { from: 'sink', to: 'cornice', name: 'Проём', kind: 'opening', direction: 'both', status: 'confirmed', evidence: 'Fixture' },
+                    { from: 'gravel', to: 'kitchen', name: 'Проход', kind: 'passage', direction: 'both', status: 'confirmed', evidence: 'Fixture' }] });
+            chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
+        });
+        for (const width of [1440, 390, 320]) {
+            await page.setViewportSize({ width, height: 1000 });
+            assert.equal(await page.locator('.bb-map-widget-place').count(), 4);
+            assert.equal(await page.locator('.bb-map-widget-arrow').count(), 3);
+            assert.match(await page.locator('.bb-map-widget-places').innerText(), /Кухонный переход/);
+            await page.locator('.bb-map-widget-places').evaluate(field => {
+                const current = field.querySelector('.is-current'), labels = [...field.querySelectorAll('.bb-map-widget-place')];
+                for (const label of labels) if (label.scrollHeight > label.clientHeight + 1) throw Error('Mini label overflows');
+                const box = current.getBoundingClientRect();
+                for (const child of current.children) if (child.getBoundingClientRect().bottom > box.bottom - 2) throw Error('Current-place text is clipped');
+                for (const arrow of field.querySelectorAll('.bb-map-widget-arrow')) {
+                    const destination = labels.find(label => label.dataset.placeId === arrow.dataset.destinationId);
+                    if (!destination || destination === current) throw Error('Arrow does not lead to a destination');
+                }
+            });
+            if (process.argv[3]) await page.locator('.bb-map-widget').screenshot({ path: path.join(process.argv[3], 'kitchen-mini-' + width + '.png') });
+        }
+        await page.locator('.bb-map-widget-place').filter({ hasText: 'Кухонный переход' }).click();
+        assert.equal(await page.locator('.bb-topology-arrow.is-route').count(), 2);
+        assert.equal(await page.locator('.bb-topology-edge.is-line.is-route.is-reverse').count(), 1);
+        assert.match(await page.locator('.bb-topology-detail').innerText(), /Каменный умывальник → Забрызганный гравий → Кухонный переход/);
+        await page.locator('.bb-topology-field').evaluate(field => {
+            const arrows = [...field.querySelectorAll('.bb-topology-arrow.is-route')];
+            for (const arrow of arrows) {
+                const line = field.querySelector('.is-line[data-connection-id="' + arrow.dataset.arrowFor + '"]');
+                const coords = arrow.getAttribute('d').match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi).map(Number);
+                const length = line.getTotalLength();
+                const point = line.getPointAtLength(line.classList.contains('is-reverse') ? 0 : length);
+                if (Math.hypot(coords[2] - point.x, coords[3] - point.y) > .1) throw Error('Arrow points against the route');
+            }
+        });
+        if (process.argv[3]) {
+            await page.waitForTimeout(600);
+            await page.locator('.bb-map-graph-modal').screenshot({ path: path.join(process.argv[3], 'kitchen-full.png') });
+        }
         assert.deepEqual(errors, []);
         console.log('Graph providers, scopes, editor places/passages, widget, route drafts, ambiguity/auto-save, unknown position, stale chat and responsive checks passed.');
     } finally { await browser.close(); }

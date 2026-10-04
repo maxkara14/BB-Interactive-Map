@@ -1,6 +1,6 @@
 import { getMapRoute, poiName } from './map-state.js';
 
-// Compact schematic: current place and up to four directly connected places.
+// Visual changes only; map data remains unchanged.
 export function getMapVisualChanges(raw, previous) {
     const places = new Map([...(previous?.zones || []), ...(previous?.connections || [])].map(place => [place.id, place]));
     return new Map([...raw.zones, ...(raw.connections || [])].map(place => [place.id, !places.has(place.id) ? 'is-new' : JSON.stringify(place) !== JSON.stringify(places.get(place.id)) ? 'is-changed' : '']));
@@ -9,9 +9,15 @@ export function getMapVisualChanges(raw, previous) {
 export function layoutMiniMap(raw) {
     const current = raw.zones.find(zone => zone.id === raw.player_place_id);
     if (!current) return { nodes: [], edges: [], height: 0, extra: 0 };
-    const edges = raw.connections.filter(edge => edge.from === current.id || edge.to === current.id);
-    const ids = [...new Set(edges.map(edge => edge.from === current.id ? edge.to : edge.from))];
-    const visible = ids.slice(0, 4), count = visible.length;
+    // Breadth-first neighborhood includes places reached through an intermediate zone.
+    const ids = [current.id], seen = new Set(ids);
+    for (let i = 0; i < ids.length; i++) {
+        for (const edge of raw.connections) {
+            const next = edge.from === ids[i] ? edge.to : edge.to === ids[i] ? edge.from : null;
+            if (next && !seen.has(next)) { seen.add(next); ids.push(next); }
+        }
+    }
+    const visible = ids.slice(1, 5), count = visible.length;
     const height = count > 2 ? 226 : count ? 142 : 62;
     const nodes = [{ ...current, x: 128, y: count > 2 ? 113 : 29, width: 104, height: 48, band: 0 }];
     visible.forEach((id, i) => {
@@ -20,7 +26,14 @@ export function layoutMiniMap(raw) {
         nodes.push({ ...raw.zones.find(zone => zone.id === id), x: single ? 128 : i % 2 ? 202 : 54,
             y: count > 2 ? row ? 197 : 29 : 113, width: 100, height: 48, band: row });
     });
-    return { nodes, edges: edges.filter(edge => visible.includes(edge.from === current.id ? edge.to : edge.from)), height, extra: ids.length - visible.length };
+    const shown = new Set([current.id, ...visible]);
+    const edges = raw.connections.filter(edge => shown.has(edge.from) && shown.has(edge.to));
+    if (edges.some(edge => edge.from !== current.id && edge.to !== current.id)) {
+        const slots = count > 2 ? [[202,29], [202,197], [54,29], [54,197]] : [[202,29], [202,113]];
+        nodes[0].x = 54; nodes[0].y = count > 2 ? 113 : 71;
+        nodes.slice(1).forEach((node, i) => { [node.x, node.y] = slots[i]; node.band = 0; });
+    }
+    return { nodes, edges, height, extra: ids.length - 1 - visible.length };
 }
 
 export function layoutMapPlaces(raw, width) {
@@ -159,10 +172,14 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
             const longest = [...segments].sort((a, b) => b.length - a.length)[0], span = longest.length;
             const active = route?.connections.includes(edge.id);
             make('path', { d: path.map((point, i) => `${i ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '), class: `bb-topology-edge is-line is-${edge.status}${initialDraw ? ' ' + (changes.get(edge.id) || '') : ''}${active ? ' is-route' : ''}${active && route.places[route.connections.indexOf(edge.id)] !== edge.from ? ' is-reverse' : ''}`, 'data-connection-id': edge.id });
-            if (edge.direction === 'forward') {
-                const last = segments.at(-1), ux = (last.b.x - last.a.x) / last.length, uy = (last.b.y - last.a.y) / last.length, ex = last.b.x, ey = last.b.y;
-                make('path', { d: `M ${ex - ux * 10 - uy * 4} ${ey - uy * 10 + ux * 4} L ${ex} ${ey} L ${ex - ux * 10 + uy * 4} ${ey - uy * 10 - ux * 4}`,
-                    class: `bb-topology-edge is-${edge.status}${active ? ' is-route' : ''}` });
+            if (active || edge.direction === 'forward') {
+                const reverse = active && route.places[route.connections.indexOf(edge.id)] !== edge.from;
+                const directed = reverse ? [...path].reverse() : path;
+                const tip = directed.at(-1), before = directed.at(-2), length = Math.hypot(tip.x - before.x, tip.y - before.y);
+                const ux = (tip.x - before.x) / length, uy = (tip.y - before.y) / length;
+                make('path', { d: `M ${tip.x - ux * 10 - uy * 4} ${tip.y - uy * 10 + ux * 4} L ${tip.x} ${tip.y} L ${tip.x - ux * 10 + uy * 4} ${tip.y - uy * 10 - ux * 4}`,
+                    class: `bb-topology-edge bb-topology-arrow is-${edge.status}${active ? ' is-route' : ''}`,
+                    'data-arrow-for': edge.id, 'data-destination-id': active ? route.places[route.connections.indexOf(edge.id) + 1] : edge.to });
             }
             const cx = (longest.a.x + longest.b.x) / 2, cy = (longest.a.y + longest.b.y) / 2;
             let angle = Math.atan2(longest.b.y - longest.a.y, longest.b.x - longest.a.x) * 180 / Math.PI;

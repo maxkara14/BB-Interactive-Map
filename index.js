@@ -1550,31 +1550,38 @@ function graphWidgetHtml(raw, changes = new Map()) {
     const layout = layoutMiniMap(raw);
     if (!layout.nodes.length) return '<small>' + tr('Положение неизвестно', 'Position unknown') + '</small>';
     const byId = new Map(layout.nodes.map(node => [node.id, node]));
+    const visibleRaw = { ...raw, zones: layout.nodes, connections: layout.edges };
+    const routes = layout.nodes.map(node => getMapRoute(visibleRaw, node.id));
     const lines = layout.edges.map(edge => {
         const points = layoutMapPassage(byId.get(edge.from), byId.get(edge.to), layout.nodes, 256);
         const cls = 'bb-map-widget-edge is-' + edge.status + ' ' + (changes.get(edge.id) || '');
-        const neighbor = edge.from === raw.player_place_id ? edge.to : edge.from;
-        const traversable = edge.status === 'confirmed' && (edge.direction === 'both' || edge.from === raw.player_place_id);
-        let html = '<path class="' + cls + ' is-line' + (edge.from !== raw.player_place_id ? ' is-reverse' : '') + '" data-neighbor-id="' + neighbor + '" data-traversable="' + traversable + '" data-connection-id="' + edge.id + '" d="' + points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ') + '"/>';
+        const route = routes.find(route => route?.connections.includes(edge.id));
+        const step = route?.connections.indexOf(edge.id);
+        const reverse = route && route.places[step] !== edge.from;
+        const destination = route ? route.places[step + 1] : null;
+        const traversable = !!route;
+        let html = '<path class="' + cls + ' is-line' + (reverse ? ' is-reverse' : '') + '" data-destination-id="' + (destination || '') + '" data-traversable="' + traversable + '" data-connection-id="' + edge.id + '" d="' + points.map((p, i) => (i ? 'L' : 'M') + p.x + ' ' + p.y).join(' ') + '"/>';
         const arrow = (tip, previous) => {
             const length = Math.hypot(tip.x - previous.x, tip.y - previous.y);
             const ux = (tip.x - previous.x) / length, uy = (tip.y - previous.y) / length;
-            return '<path class="' + cls + ' bb-map-widget-arrow" d="M' + (tip.x - ux * 7 - uy * 3) + ' ' + (tip.y - uy * 7 + ux * 3)
+            return '<path class="' + cls + ' bb-map-widget-arrow" data-destination-id="' + destination + '" d="M' + (tip.x - ux * 7 - uy * 3) + ' ' + (tip.y - uy * 7 + ux * 3)
                 + ' L' + tip.x + ' ' + tip.y + ' L' + (tip.x - ux * 7 + uy * 3) + ' ' + (tip.y - uy * 7 - ux * 3) + '"/>';
         };
-        if (edge.status !== 'blocked') {
-            html += arrow(points.at(-1), points.at(-2));
-            if (edge.direction === 'both') html += arrow(points[0], points[1]);
-        }
+        if (traversable) html += reverse ? arrow(points[0], points[1]) : arrow(points.at(-1), points.at(-2));
         return html;
     }).join('');
-    return '<div class="bb-map-widget-places" style="aspect-ratio:256/' + layout.height + '"><svg viewBox="0 0 256 ' + layout.height + '" aria-hidden="true">' + lines + '</svg>'
+    const shapes = layout.nodes.map(place => {
+        const x = place.x - place.width / 2, y = place.y - place.height / 2;
+        const cls = 'bb-map-widget-shape is-' + place.kind + ' is-' + place.threat_level + (place.id === raw.player_place_id ? ' is-current' : '') + ' ' + (changes.get(place.id) || '');
+        return '<rect class="' + cls + '" data-zone-id="' + place.id + '" x="' + x + '" y="' + y + '" width="' + place.width + '" height="' + place.height + '" rx="' + (place.kind === 'outdoor' ? 20 : place.kind === 'passage' ? 2 : 6) + '"/>';
+    }).join('');
+    return '<div class="bb-map-widget-places" style="aspect-ratio:256/' + layout.height + '"><svg viewBox="0 0 256 ' + layout.height + '" aria-hidden="true">' + lines + shapes + '</svg>'
         + layout.nodes.map(place => {
             const current = place.id === raw.player_place_id;
             const edge = layout.edges.find(edge => edge.from === place.id || edge.to === place.id);
             const title = place.name + (current ? ' · ' + tr('Вы здесь', 'You are here') : edge ? ' · ' + edge.name + (edge.status === 'confirmed' ? '' : ' · ' + topologyValueLabel(edge.status)) : '');
             const attrs = ' class="bb-map-widget-place is-' + place.kind + ' is-' + place.threat_level + ' ' + (changes.get(place.id) || '') + (current ? ' is-current' : '') + '" title="' + escapeHtml(title) + '" style="left:' + place.x / 256 * 100 + '%;top:' + place.y / layout.height * 100 + '%;width:' + place.width / 256 * 100 + '%;height:' + place.height / layout.height * 100 + '%"';
-            return current ? '<span' + attrs + '><span>' + escapeHtml(place.name) + '</span></span>'
+            return current ? '<span' + attrs + '><small class="bb-map-widget-current-label">' + tr('Вы здесь', 'You are here') + '</small><span>' + escapeHtml(place.name) + '</span></span>'
                 : '<button type="button" data-place-id="' + place.id + '"' + attrs + '><span>' + escapeHtml(place.name) + '</span></button>';
         }).join('') + '</div>' + (layout.extra ? '<small>+' + layout.extra + ' ' + tr('на полной карте', 'on the full map') + '</small>' : '');
 }
@@ -1661,8 +1668,10 @@ function renderMapWidget() {
     };
     for (const button of widget.querySelectorAll('.bb-map-widget-place[data-place-id]')) {
         const highlight = active => {
+            const layout = layoutMiniMap(raw);
+            const route = active ? getMapRoute({ ...raw, zones: layout.nodes, connections: layout.edges }, button.dataset.placeId) : null;
             for (const line of widget.querySelectorAll('.bb-map-widget-edge.is-line')) {
-                line.classList.toggle('is-hover', active && line.dataset.neighborId === button.dataset.placeId && line.dataset.traversable === 'true');
+                line.classList.toggle('is-hover', !!route?.connections.includes(line.dataset.connectionId));
             }
         };
         button.onpointerenter = button.onfocus = () => highlight(true);

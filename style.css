@@ -527,3 +527,27 @@
 }
 
 .bb-topology-edge.is-line.is-new:not(.is-route):not(.is-hover), .bb-map-widget-edge.is-new:not(.is-hover) { animation: bb-map-appear .5s ease-out both; }
+/* Zone perimeter speed follows the scene threat level. */
+.bb-topology-shape, .bb-map-widget-shape {
+    --bb-perimeter-speed: 14s;
+    stroke-dasharray: 6 5;
+    animation: bb-map-perimeter var(--bb-perimeter-speed) linear infinite;
+}
+.bb-topology-shape.is-tension, .bb-map-widget-shape.is-tension { --bb-perimeter-speed: 6s; stroke-width: 1.8; }
+.bb-topology-shape.is-danger, .bb-map-widget-shape.is-danger { --bb-perimeter-speed: 2s; stroke-width: 2.2; }
+.bb-topology-shape.is-new, .bb-map-widget-shape.is-new { animation: bb-map-perimeter var(--bb-perimeter-speed) linear infinite, bb-map-appear .5s ease-out both; }
+.bb-topology-shape.is-changed, .bb-map-widget-shape.is-changed { animation: bb-map-perimeter var(--bb-perimeter-speed) linear infinite, bb-map-zone-update 1.4s ease-out; }
+.bb-map-widget-shape { fill: #142124; stroke: #72ab91; stroke-width: 1.4; }
+.bb-map-widget-shape.is-tension { stroke: #d8b46a; }
+.bb-map-widget-shape.is-danger { stroke: #d77d7d; }
+.bb-map-widget-shape.is-current { fill: #1a3638; }
+.bb-map-widget-place, .bb-map-widget-place.is-current { border-color: transparent !important; background: transparent; }
+.bb-map-widget-place:hover { background: #79d7d30a; }
+.bb-map-widget-place.is-current { flex-direction: column; gap: 2px; padding: 3px 5px; }
+.bb-map-widget-current-label { flex: none; font-size: 8px; line-height: 10px; color: #9dceca; }
+.bb-map-widget-place.is-current > span { flex: none; line-height: 12px; max-height: 24px; -webkit-line-clamp: 2; }
+.bb-topology-arrow { stroke-dasharray: none; stroke-linejoin: round; }
+@keyframes bb-map-perimeter { to { stroke-dashoffset: -22; } }
+.bb-map-widget-place.is-current { padding: 3px 5px; }
+.bb-map-widget-current-label { flex: none; }
+.bb-map-widget-place.is-current > span { flex: none; line-height: 12px; max-height: 24px; }

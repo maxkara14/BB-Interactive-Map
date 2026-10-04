@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { layoutMiniMap, layoutMapPassage, getMapVisualChanges } from '../map-topology-view.js';
 
-test('mini layout keeps direction/status, bounds nodes and limits direct neighbors without mutation', () => {
+test('mini layout keeps direction/status, bounds nodes and limits nearby places without mutation', () => {
     const raw = { player_place_id: 'home', zones: ['home','a','b','c','d','e'].map(id => ({ id, name: id, kind: 'room' })),
         connections: ['a','b','c','d','e'].map((id, i) => ({ id, from: i === 1 ? id : 'home', to: i === 1 ? 'home' : id, direction: i ? 'forward' : 'both', status: i === 3 ? 'blocked' : 'confirmed' })) };
     const before = JSON.stringify(raw), layout = layoutMiniMap(raw);
@@ -32,4 +32,13 @@ test('visual changes distinguish new and changed places without modifying maps',
     assert.equal(getMapVisualChanges(after, before).get('b'), 'is-new');
     assert.equal(getMapVisualChanges(before, before).get('a'), '');
     assert.equal(JSON.stringify([before, after]), snapshot);
+});
+
+test('mini includes the second-hop kitchen and its real connecting edge', () => {
+    const raw = { player_place_id: 'sink', zones: ['sink','gravel','cornice','kitchen'].map(id => ({ id, name: id })),
+        connections: [{ id: 'a', from: 'sink', to: 'gravel' }, { id: 'b', from: 'sink', to: 'cornice' }, { id: 'c', from: 'gravel', to: 'kitchen' }] };
+    const layout = layoutMiniMap(raw);
+    assert.deepEqual(layout.nodes.map(node => node.id), ['sink','gravel','cornice','kitchen']);
+    assert.equal(layout.edges.length, 3); assert.equal(layout.extra, 0);
+    assert.equal(layout.edges.some(edge => edge.from === 'sink' && edge.to === 'kitchen'), false);
 });
