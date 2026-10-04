@@ -1,4 +1,5 @@
 export const MAP_DATA_VERSION = 2;
+export const GRAPH_MAP_DATA_VERSION = 3;
 
 export function isSameChat(initial, current) {
     return initial?.chatId != null
@@ -221,16 +222,28 @@ function previousEntityIds(previousRaw) {
 }
 
 export function normalizeMapData(input, previousRaw = null) {
+    return normalizeMapState(input, previousRaw, false);
+}
+
+// Approved local topology: places and evidenced passages; no inferred grid adjacency.
+export function normalizeGraphMapData(input, previousRaw = null) {
+    return normalizeMapState(input, previousRaw, true);
+}
+
+function normalizeMapState(input, previousRaw, graph) {
     if (!input || typeof input !== 'object' || !Array.isArray(input.zones)) throw new Error('invalid_map');
+    if (graph && (input.layout !== 'graph' || !['scene', 'surroundings'].includes(input.scope)
+        || input.zones.length > 24 || !Array.isArray(input.connections) || input.connections.length > 48)) throw new Error('invalid_map');
     const zonesByPosition = new Map();
     for (const source of input.zones) {
-        if (!source || !POSITIONS.has(source.position)) throw new Error('invalid_map');
+        if (!source || (graph ? !validTopologyId(source.id) || !['room', 'outdoor', 'passage', 'area', 'unknown'].includes(source.kind)
+            || (source.uncertain !== undefined && typeof source.uncertain !== 'boolean') : !POSITIONS.has(source.position))) throw new Error('invalid_map');
         const threat = source.threat_level || 'safe';
         if (!Object.hasOwn(THREAT_RANK, threat)) throw new Error('invalid_map');
         if (source.poi !== undefined && !Array.isArray(source.poi)) throw new Error('invalid_map');
         if (source.characters !== undefined && !Array.isArray(source.characters)) throw new Error('invalid_map');
         const zone = {
-            position: source.position,
+            ...(graph ? { id: source.id, kind: source.kind, uncertain: source.uncertain === true } : { position: source.position }),
             name: requiredText(source.name),
             summary: optionalText(source.summary),
             threat_level: threat,
@@ -248,11 +261,14 @@ export function normalizeMapData(input, previousRaw = null) {
                 thought: optionalText(char?.thought),
             })),
         };
-        const existing = zonesByPosition.get(zone.position);
+        if (graph && [zone.name, zone.summary, zone.threat_reason].some(text => text.length > 1500)) throw new Error('invalid_map');
+        const locationKey = graph ? zone.id : zone.position;
+        const existing = zonesByPosition.get(locationKey);
         if (!existing) {
-            zonesByPosition.set(zone.position, zone);
+            zonesByPosition.set(locationKey, zone);
             continue;
         }
+        if (graph) throw new Error('invalid_map');
         existing.name += ` / ${zone.name}`;
         existing.summary = [existing.summary, zone.summary].filter(Boolean).join(' ');
         if (THREAT_RANK[zone.threat_level] > THREAT_RANK[existing.threat_level]) existing.threat_level = zone.threat_level;
@@ -293,19 +309,115 @@ export function normalizeMapData(input, previousRaw = null) {
             }
         }
     }
+    if (graph && [requiredText(input.schematic_name), optionalText(input.atmosphere)].some(text => text.length > 1500)) throw new Error('invalid_map');
+    const topology = graph ? normalizeTopology(input, zones, previousRaw) : {};
     return {
         schematic_name: requiredText(input.schematic_name),
         atmosphere: optionalText(input.atmosphere),
         zones,
+        ...topology,
         ...(input.unlocated_objects !== undefined ? { unlocated_objects: unlocated } : {}),
         ...(input.object_memory_scope === 'scene' ? { object_memory_scope: 'scene' } : {}),
         ...(input.effects !== undefined ? { effects: normalizeEffects(input.effects, previousRaw?.effects) } : {}),
     };
 }
 
+function validTopologyId(value) {
+    return typeof value === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(value);
+}
+
+function normalizeTopology(input, zones, previous) {
+    const oldZones = previous?.layout === 'graph' ? previous.zones : [];
+    const oldIds = new Map(oldZones.map(zone => [zone.id, zone]));
+    const used = new Set(), references = new Map();
+    let nextId = Math.max(0, ...oldZones.map(zone => Number(/^bbp-(\d+)$/.exec(zone.id)?.[1]) || 0)) + 1;
+    // Reserve all prior IDs first; reordering must not hand an existing ID to a new place.
+    for (const zone of zones) {
+        if (!oldIds.has(zone.id)) continue;
+        references.set(zone.id, zone.id); used.add(zone.id);
+    }
+    for (const zone of zones) {
+        const sourceId = zone.id;
+        const sameScene = holderKey(input.schematic_name) === holderKey(previous?.schematic_name);
+        const matches = sameScene ? oldZones.filter(old => holderKey(old.name) === holderKey(zone.name)) : [];
+        const unique = zones.filter(other => holderKey(other.name) === holderKey(zone.name)).length === 1;
+        const reuse = !references.has(sourceId) && unique && matches.length === 1 && !used.has(matches[0].id);
+        const id = references.get(sourceId) || (reuse ? matches[0].id : `bbp-${nextId++}`);
+        references.set(sourceId, id); used.add(id); zone.id = id;
+    }
+    if (input.player_place_id !== null && !references.has(input.player_place_id)) throw new Error('invalid_map');
+    const player_place_id = input.player_place_id === null ? null : references.get(input.player_place_id);
+    const edgeKeys = new Set(), edgeIds = new Set();
+    const oldEdges = previous?.layout === 'graph' ? previous.connections || [] : [];
+    let nextEdgeId = Math.max(0, ...oldEdges.map(edge => Number(/^bbc-(\d+)$/.exec(edge.id)?.[1]) || 0)) + 1;
+    const key = edge => JSON.stringify([edge.direction === 'forward' ? [edge.from, edge.to] : [edge.from, edge.to].sort(), edge.direction]);
+    const connections = input.connections.map(source => {
+        if (!source || !references.has(source.from) || !references.has(source.to) || source.from === source.to
+            || !['door', 'path', 'stairs', 'opening', 'passage', 'unknown'].includes(source.kind)
+            || !['confirmed', 'uncertain', 'blocked'].includes(source.status)
+            || (source.direction !== undefined && !['both', 'forward'].includes(source.direction))) throw new Error('invalid_map');
+        const edge = { from: references.get(source.from), to: references.get(source.to), name: requiredText(source.name),
+            kind: source.kind, status: source.status, direction: source.direction || 'both', evidence: optionalText(source.evidence) };
+        if ([edge.name, edge.evidence].some(text => text.length > 1500) || (edge.status !== 'uncertain' && !edge.evidence)) throw new Error('invalid_map');
+        const identity = key(edge);
+        if (edgeKeys.has(identity)) throw new Error('invalid_map');
+        edgeKeys.add(identity);
+        const matches = oldEdges.filter(old => key(old) === identity);
+        edge.id = matches.length === 1 && !edgeIds.has(matches[0].id) ? matches[0].id : `bbc-${nextEdgeId++}`;
+        edgeIds.add(edge.id);
+        return edge;
+    });
+    return { layout: 'graph', scope: input.scope, player_place_id, connections };
+}
+
+// Read into a separate view. Existing saved raw/context/previous values remain untouched.
+export function readMapState(saved) {
+    if (!saved?.raw || ![1, 2, 3].includes(saved.version ?? 1)) throw new Error('invalid_map');
+    if (saved.version === GRAPH_MAP_DATA_VERSION) {
+        const view = normalizeGraphMapData(saved.raw, saved.raw), used = new Set();
+        // A saved graph already resolved identity. Reading must not reassign repeated names.
+        const keepIds = (entries, sources) => entries.forEach((entry, index) => {
+            const id = sources[index]?.id;
+            if (!validTopologyId(id) || used.has(id)) throw new Error('invalid_map');
+            used.add(id); entry.id = id;
+        });
+        keepIds(view.zones, saved.raw.zones);
+        keepIds(view.connections, saved.raw.connections);
+        keepIds(view.effects || [], saved.raw.effects || []);
+        view.zones.forEach((zone, index) => {
+            keepIds(zone.poi, saved.raw.zones[index].poi || []);
+            keepIds(zone.characters, saved.raw.zones[index].characters || []);
+        });
+        keepIds(view.unlocated_objects || [], saved.raw.unlocated_objects || []);
+        return view;
+    }
+    if (saved.raw.layout === 'graph') throw new Error('invalid_map');
+    return normalizeMapData(saved.raw, saved.raw);
+}
+
+export function getMapRoute(raw, destinationId) {
+    if (raw?.layout !== 'graph' || !raw.player_place_id || !raw.zones.some(zone => zone.id === destinationId)) return null;
+    const queue = [{ places: [raw.player_place_id], connections: [] }], seen = new Set();
+    while (queue.length) {
+        const route = queue.shift(), last = route.places.at(-1);
+        if (last === destinationId) return route;
+        if (seen.has(last)) continue;
+        seen.add(last);
+        for (const edge of raw.connections) {
+            if (edge.status !== 'confirmed') continue;
+            const next = edge.from === last ? edge.to : edge.direction === 'both' && edge.to === last ? edge.from : null;
+            if (next && !seen.has(next)) queue.push({ places: [...route.places, next], connections: [...route.connections, edge.id] });
+        }
+    }
+    return null;
+}
+
 export function buildMapContextString(mapData) {
     if (!mapData || !Array.isArray(mapData.zones)) return '';
-    let context = `[Map context: The player is at "${mapData.schematic_name}". Atmosphere: ${mapData.atmosphere}. `;
+    const graph = mapData.layout === 'graph';
+    const location = graph ? mapData.zones.find(zone => zone.id === mapData.player_place_id)?.name : mapData.schematic_name;
+    let context = graph ? `[Map context: Scene "${mapData.schematic_name}". Scope: ${mapData.scope}. Player position: ${location ? JSON.stringify(location) : 'unknown'}. Atmosphere: ${mapData.atmosphere}. `
+        : `[Map context: The player is at "${mapData.schematic_name}". Atmosphere: ${mapData.atmosphere}. `;
     for (const zone of mapData.zones) {
         const characters = Array.isArray(zone.characters) && zone.characters.length
             ? ` Characters: ${zone.characters.map(c => `${c.name} (${c.mood || ''}, attitude: ${c.attitude || ''})`).join(', ')}.` : '';
@@ -316,12 +428,16 @@ export function buildMapContextString(mapData) {
         if (zone.threat_level === 'danger') threat = ` [🔴 DANGER: ${zone.threat_reason || 'Unknown'}]`;
         else if (zone.threat_level === 'tension') threat = ` [🟠 Tension: ${zone.threat_reason || 'Suspicious'}]`;
         else if (zone.threat_reason) threat = ` [🟢 Safe: ${zone.threat_reason}]`;
-        if (characters || objects || zone.threat_level !== 'safe' || zone.threat_reason) {
-            context += `Zone "${zone.name}" (${zone.position})${threat}: ${zone.summary || ''}${characters}${objects} `;
+        if (graph || characters || objects || zone.threat_level !== 'safe' || zone.threat_reason) {
+            context += `Zone "${zone.name}" (${graph ? `${zone.kind}, id: ${zone.id}${zone.uncertain ? ', uncertain' : ''}` : zone.position})${threat}: ${zone.summary || ''}${characters}${objects} `;
         }
     }
+    if (graph) {
+        for (const edge of mapData.connections) context += `Passage "${edge.name}": ${edge.from} ${edge.direction === 'forward' ? '->' : '<->'} ${edge.to} (${edge.kind}, ${edge.status}); evidence: ${edge.evidence || 'not established'}. `;
+        context += 'Missing connections are unknown, not evidence of a blocked path. ';
+    }
     const carried = (mapData.unlocated_objects || []).filter(item => item.item_state === 'held');
-    if (carried.length) context += `Carried objects outside the current grid: ${carried.map(item =>
+    if (carried.length) context += `Carried objects ${graph ? 'outside mapped places' : 'outside the current grid'}: ${carried.map(item =>
         `${item.name} (held by ${item.holder})`).join(', ')}. `;
     return `${context}]`;
 }
@@ -333,7 +449,7 @@ export function createSavedMap(raw, current = null) {
         context: current.context || '',
     } : null;
     return {
-        version: MAP_DATA_VERSION,
+        version: raw.layout === 'graph' ? GRAPH_MAP_DATA_VERSION : MAP_DATA_VERSION,
         raw,
         context: buildMapContextString(raw),
         previous,
