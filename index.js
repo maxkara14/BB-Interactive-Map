@@ -2,7 +2,7 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
-import { normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
+import { normalizeGraphMapData, readMapState, getMapRoute, requiresTopologyReview, normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 import { createMapTopologyView } from './map-topology-view.js';
 
@@ -31,7 +31,9 @@ settings.autoUpdate ??= false;
 settings.autoApply ??= false;
 settings.highlightMentions ??= false;
 if (!['simple', 'enhance'].includes(settings.travelWriting)) settings.travelWriting = 'simple';
-if (!['local', 'global'].includes(settings.scanScale)) settings.scanScale = 'local';
+if (settings.scanScale === 'local') settings.scanScale = 'scene';
+if (settings.scanScale === 'global') settings.scanScale = 'surroundings';
+if (!['scene', 'surroundings'].includes(settings.scanScale)) settings.scanScale = 'scene';
 
 const WIDGET_POSITIONS = ['northwest', 'north', 'northeast', 'west', 'center', 'east', 'southwest', 'south', 'southeast'];
 let scanInProgress = false;
@@ -67,52 +69,31 @@ function tr(ru, en) {
 }
 
 const MAP_PROMPT = `<task>
-Analyze the recent roleplay context and generate a topological schematic of the environment.
+Analyze the recent roleplay scene and return a schematic of places and established passages.
 {{scaleInstruction}}
 </task>
 {{previousMap}}
 <rules>
-1. Map the surroundings into zones: "center", "north", "south", "east", "west", and optionally corners ("northwest", etc.). CRITICAL: Each zone MUST have a UNIQUE "position". Never assign the same position to multiple zones.
-2. Put characters INSIDE their current zone.
-3. For the map itself, determine the overall "atmosphere" (e.g., "🌙 Night | 🌧️ Rain" or "☀️ Day | ☕ Calm"). Use '|' to separate distinct atmospheric traits.
-4. For EACH zone, assign a "threat_level": "safe", "tension" (suspicious/uneasy), or "danger" (combat/traps), AND a "threat_reason" (short phrase describing WHY, e.g., "Warm and quiet" or "Darkness and hostile presence").
-5. For EACH zone, list 1-3 "poi" (Points of Interest - items, details, furniture) as objects with "name" and a short "description".
-6. For EACH character, provide a short "description", "mood" (emoji + short state) and "attitude" (how they feel about the user).
-7. "thought" is a 1-sentence current thought of the character.
-8. Keep zone "name" very short (1-3 words).
-9. Output STRICTLY as raw JSON.
-10. Write descriptive JSON values in the language of the recent chat. Keep JSON keys and enum values in English.
+Use layout "graph" and scope "scene" or "surroundings". Include 1–24 places and 0–48 connections.
+Each place needs a unique ASCII id, name, kind (room, outdoor, passage, area, unknown), summary,
+threat_level (safe, tension, danger), threat_reason, uncertain (boolean), poi and characters arrays.
+Objects have name and description. Characters have name, description, mood, attitude and thought.
+Reuse previous place IDs when the place is the same, even if its name changes. Give new places new IDs.
+player_place_id is the established player's place ID, or null if unknown. A requested movement is not a completed move.
+Every connection has from and to place IDs, name, kind (door, path, stairs, opening, passage, unknown),
+status (confirmed, uncertain, blocked), direction (both or forward), and evidence from the narrative.
+Confirmed and blocked passages require concrete evidence. Missing links mean unknown connectivity.
+Do not infer connections from a former grid's compass positions. Do not invent rooms or passages to fill space.
+Use uncertain for ambiguous places or connections. Do not infer a traversable route from an uncertain or blocked passage.
+Use one connection per pair/direction, no self loops or dangling references. Keep all descriptive fields under 1500 characters.
+Write descriptive values in the recent chat language; keys and enum values stay English. Output raw JSON only.
 </rules>
-
 <format>
-{
-  "schematic_name": "Location name",
-  "atmosphere": "Atmosphere | Time | Weather",
-  "zones": [
-    {
-      "position": "center", 
-      "name": "Zone name",
-      "summary": "Short description...",
-      "threat_level": "safe",
-      "threat_reason": "Warm light and calm surroundings",
-      "poi": [{ "name": "Object 1", "description": "A short visible detail" }],
-      "characters": [
-        { 
-          "name": "Name",
-          "description": "A short visible detail",
-          "mood": "😠 Irritated",
-          "attitude": "Wary",
-          "thought": "A brief thought..."
-        }
-      ]
-    }
-  ]
-}
+{"layout":"graph","scope":"scene","schematic_name":"Location","atmosphere":"Time | Weather",
+ "player_place_id":"hall","zones":[{"id":"hall","name":"Hall","kind":"room","summary":"Visible scene",
+ "threat_level":"safe","threat_reason":"Quiet","uncertain":false,"poi":[],"characters":[]}],"connections":[]}
 </format>
-
-<context>
-Recent chat: """{{lastMessages}}"""
-</context>`;
+<context>Recent chat: """{{lastMessages}}"""</context>`;
 
 async function runMainGen(promptText) {
     if (typeof generateQuietPrompt === 'function') {
@@ -230,6 +211,7 @@ function getMapDataForCurrentChat() {
 
 function getMapContextForCurrentChat() {
     const saved = getMapDataForCurrentChat();
+    if (saved && ![1, 2, 3].includes(saved.version ?? 1)) return '';
     const memory = saved?.raw?.unlocated_objects?.some(item => item.item_state !== 'held')
         ? buildMapContextString(activeMapObjects(saved.raw)) : saved?.context || '';
     if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
@@ -327,7 +309,7 @@ function mapChangesHtml(previous, next) {
     const types = { scene: ['Сцена', 'Scene'], zone: ['Зона', 'Zone'], character: ['Персонаж', 'Character'], object: ['Предмет', 'Object'], connection: ['Проход', 'Passage'] };
     const zoneLabel = (raw, position) => {
         const zone = raw?.zones?.find(zone => (zone.position ?? zone.id) === position);
-        return [zone?.name, mapPositionLabel(position)].filter(Boolean).join(' · ');
+        return raw?.layout === 'graph' ? zone?.name || tr('Неизвестное место', 'Unknown place') : [zone?.name, mapPositionLabel(position)].filter(Boolean).join(' · ');
     };
     const locations = (raw, positions) => (Array.isArray(positions) ? positions : [positions])
         .filter(Boolean).map(position => zoneLabel(raw, position)).join('; ') || '—';
@@ -359,6 +341,10 @@ function mapChangesHtml(previous, next) {
 }
 
 function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getContext(), expectedMap = getMapDataForCurrentChat()) {
+    if (isSavedMap) {
+        try { data = readMapState(expectedMap); }
+        catch { toastr.warning(tr('Сохранённая карта имеет неподдерживаемый формат.', 'The saved map has an unsupported format.'), 'BB Map'); return; }
+    }
     mapTopologyView?.destroy(); mapTopologyView = null;
     if (data.layout === 'graph') return showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap);
     mapTravelController?.abort();
@@ -543,86 +529,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
             panel.append(note);
             return;
         }
-        const { from, to } = transition;
-        panel.classList.add(`is-${['safe', 'tension', 'danger'].includes(to.threat_level) ? to.threat_level : 'safe'}`);
-        const route = document.createElement('strong');
-        route.textContent = `${from.name} → ${to.name}`;
-        note.textContent = `${mapThreatLabel(to.threat_level || 'safe')} · ${to.threat_reason || tr('Обстановка не описана.', 'Conditions are not described.')}`;
-        const source = document.createElement('small');
-        source.textContent = tr('По сохранённой карте. Переход добавится в черновик; расположение обновится после событий сцены и сохранения карты.',
-            'From the saved map. Travel is added to your draft; the position updates after the scene and saving the map.');
-        const prepare = document.createElement('button');
-        prepare.type = 'button';
-        prepare.className = 'bb-map-btn';
-        prepare.textContent = tr('ПОДГОТОВИТЬ ПЕРЕХОД', 'PREPARE TRAVEL');
-        const literary = settings.travelWriting === 'enhance';
-        const instruction = document.createElement('input');
-        instruction.type = 'text'; instruction.className = 'text_pole'; instruction.maxLength = 1000;
-        instruction.placeholder = tr('Например: осторожно, не привлекая внимания', 'For example: cautiously, without drawing attention');
-        const instructionLabel = document.createElement('label');
-        instructionLabel.textContent = tr('Уточнение действия (необязательно)', 'Action detail (optional)');
-        instructionLabel.append(instruction);
-        const status = document.createElement('p'); status.setAttribute('role', 'status');
-        if (literary) {
-            prepare.textContent = tr('НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', 'WRITE ACTION · ENHANCE');
-            source.textContent = tr('Запрос через подключение Enhance Gen. Результат добавится в черновик; отправка вручную.', 'A request through the Enhance Gen connection. The result is appended to your draft; sending is manual.');
-            if (!getEnhanceActionAPI()) {
-                prepare.disabled = true;
-                status.textContent = tr('Нужен запущенный Enhance Gen с поддержкой действий карты. Обновите оба расширения или выберите простой текст.', 'Requires a running Enhance Gen with map action support. Update both extensions or choose simple text.');
-            }
-        }
-        prepare.onclick = async () => {
-            if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
-                || getMapMode(chat_metadata) !== 'game') {
-                toastr.warning(tr('Чат, режим или карта изменились. Откройте карту заново.', 'The chat, mode, or map changed. Reopen the map.'), 'BB Map');
-                return;
-            }
-            const composer = document.getElementById('send_textarea');
-            if (!composer || composer.disabled || composer.readOnly || document.body.dataset.generating) {
-                toastr.warning(tr('Поле ввода сейчас недоступно. Дождитесь завершения ответа.', 'The message input is unavailable. Wait for the reply to finish.'), 'BB Map');
-                return;
-            }
-            if (literary) {
-                const api = getEnhanceActionAPI();
-                if (!api || mapTravelController) return;
-                const controller = new AbortController(); mapTravelController = controller;
-                overlay.remove();
-                composer.focus({ preventScroll: true });
-                const isCurrent = () => isSameChat(chatForMap, SillyTavern.getContext())
-                    && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && mapTravelController === controller;
-                try {
-                    await api.generatePlayerAction({ kind: 'map_travel', from, to,
-                        mapContext: getMapContextForCurrentChat(), instruction: instruction.value, isCurrent, signal: controller.signal });
-                } catch (error) {
-                    const messages = {
-                        busy: tr('Enhance или таверна уже генерирует. Попробуйте позже.', 'Enhance or SillyTavern is already generating. Try again later.'),
-                        draft_changed: tr('Черновик изменился. Результат не применён.', 'The draft changed. The result was not applied.'),
-                        stale_chat: tr('Чат изменился. Результат не применён.', 'The chat changed. The result was not applied.'),
-                        stale_action: tr('Карта или режим изменились. Результат не применён.', 'The map or mode changed. The result was not applied.'),
-                    };
-                    const message = error?.name === 'AbortError' ? tr('Отменено. Черновик сохранён.', 'Cancelled. Your draft is preserved.')
-                        : messages[error?.code] || tr('Enhance не смог подготовить действие. Проверьте его подключение и лимит ответа; черновик сохранён.', 'Enhance could not prepare the action. Check its connection and response limit; your draft is preserved.');
-                    if (error?.name === 'AbortError') toastr.info(message, 'BB Map');
-                    else toastr.warning(message, 'BB Map');
-                } finally {
-                    if (mapTravelController === controller) mapTravelController = null;
-                }
-                return;
-            }
-            const draft = createTravelDraft(composer.value, transition, currentLanguage());
-            if (composer.maxLength >= 0 && draft.length > composer.maxLength) {
-                toastr.warning(tr('Действие не помещается в черновик.', 'The action exceeds the draft length limit.'), 'BB Map');
-                return;
-            }
-            composer.value = draft;
-            composer.dispatchEvent(new Event('input', { bubbles: true }));
-            overlay.remove();
-            composer.focus();
-            composer.setSelectionRange(draft.length, draft.length);
-        };
-        panel.append(route, note, source);
-        if (literary) panel.append(instructionLabel);
-        panel.append(prepare, status);
+        renderTravelPanel(panel, transition, chatForMap, expectedMap);
     }
 
     const saveBtn = document.getElementById('bb-map-save-btn');
@@ -671,6 +578,98 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
     };
 }
 
+
+function renderTravelPanel(panel, transition, chatForMap, expectedMap, routeContext = '') {
+    if (mapTravelController) return;
+    panel.className = 'bb-map-travel'; panel.replaceChildren();
+    const note = document.createElement('p');
+    const { from, to } = transition;
+    const routeThreats = (transition.routePlaces || [to]).filter(place => place.threat_level === 'danger' || place.threat_level === 'tension');
+    const level = routeThreats.some(place => place.threat_level === 'danger') ? 'danger' : routeThreats.length ? 'tension' : 'safe';
+    panel.classList.add(`is-${level}`);
+    const route = document.createElement('strong');
+    route.textContent = `${from.name} → ${to.name}`;
+    note.textContent = routeThreats.length ? routeThreats.map(place => `${place.name} · ${mapThreatLabel(place.threat_level)} · ${place.threat_reason || ''}`).join('; ')
+        : `${mapThreatLabel(to.threat_level || 'safe')} · ${to.threat_reason || tr('Обстановка не описана.', 'Conditions are not described.')}`;
+    const source = document.createElement('small');
+    source.textContent = tr('По сохранённой карте. Переход добавится в черновик; расположение обновится после событий сцены и сохранения карты.',
+        'From the saved map. Travel is added to your draft; the position updates after the scene and saving the map.');
+    const prepare = document.createElement('button');
+    prepare.type = 'button';
+    prepare.className = 'bb-map-btn';
+    prepare.textContent = tr('ПОДГОТОВИТЬ ПЕРЕХОД', 'PREPARE TRAVEL');
+    const literary = settings.travelWriting === 'enhance';
+    const instruction = document.createElement('input');
+    instruction.type = 'text'; instruction.className = 'text_pole'; instruction.maxLength = 1000;
+    instruction.placeholder = tr('Например: осторожно, не привлекая внимания', 'For example: cautiously, without drawing attention');
+    const instructionLabel = document.createElement('label');
+    instructionLabel.textContent = tr('Уточнение действия (необязательно)', 'Action detail (optional)');
+    instructionLabel.append(instruction);
+    const status = document.createElement('p'); status.setAttribute('role', 'status');
+    if (literary) {
+        prepare.textContent = tr('НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', 'WRITE ACTION · ENHANCE');
+        source.textContent = tr('Запрос через подключение Enhance Gen. Результат добавится в черновик; отправка вручную.', 'A request through the Enhance Gen connection. The result is appended to your draft; sending is manual.');
+        if (!getEnhanceActionAPI()) {
+            prepare.disabled = true;
+            status.textContent = tr('Нужен запущенный Enhance Gen с поддержкой действий карты. Обновите оба расширения или выберите простой текст.', 'Requires a running Enhance Gen with map action support. Update both extensions or choose simple text.');
+        }
+    }
+    prepare.onclick = async () => {
+        if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
+            || getMapMode(chat_metadata) !== 'game') {
+            toastr.warning(tr('Чат, режим или карта изменились. Откройте карту заново.', 'The chat, mode, or map changed. Reopen the map.'), 'BB Map');
+            return;
+        }
+        const composer = document.getElementById('send_textarea');
+        if (!composer || composer.disabled || composer.readOnly || document.body.dataset.generating) {
+            toastr.warning(tr('Поле ввода сейчас недоступно. Дождитесь завершения ответа.', 'The message input is unavailable. Wait for the reply to finish.'), 'BB Map');
+            return;
+        }
+        if (literary) {
+            const api = getEnhanceActionAPI();
+            if (!api || mapTravelController) return;
+            const controller = new AbortController(); mapTravelController = controller;
+            removeMapOverlay();
+            composer.focus({ preventScroll: true });
+            const isCurrent = () => isSameChat(chatForMap, SillyTavern.getContext())
+                && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && mapTravelController === controller;
+            try {
+                await api.generatePlayerAction({ kind: 'map_travel', from, to,
+                    mapContext: getMapContextForCurrentChat() + routeContext, instruction: instruction.value, isCurrent, signal: controller.signal });
+            } catch (error) {
+                const messages = {
+                    busy: tr('Enhance или таверна уже генерирует. Попробуйте позже.', 'Enhance or SillyTavern is already generating. Try again later.'),
+                    draft_changed: tr('Черновик изменился. Результат не применён.', 'The draft changed. The result was not applied.'),
+                    stale_chat: tr('Чат изменился. Результат не применён.', 'The chat changed. The result was not applied.'),
+                    stale_action: tr('Карта или режим изменились. Результат не применён.', 'The map or mode changed. The result was not applied.'),
+                };
+                const message = error?.name === 'AbortError' ? tr('Отменено. Черновик сохранён.', 'Cancelled. Your draft is preserved.')
+                    : messages[error?.code] || tr('Enhance не смог подготовить действие. Проверьте его подключение и лимит ответа; черновик сохранён.', 'Enhance could not prepare the action. Check its connection and response limit; your draft is preserved.');
+                if (error?.name === 'AbortError') toastr.info(message, 'BB Map');
+                else toastr.warning(message, 'BB Map');
+            } finally {
+                if (mapTravelController === controller) mapTravelController = null;
+            }
+            return;
+        }
+        const action = transition.routeNames?.length > 2
+            ? (currentLanguage() === 'ru' ? 'Я направляюсь по маршруту: ' : 'I follow the route: ') + transition.routeNames.map(name => `«${name}»`).join(' → ') + '.' : null;
+        const draft = action ? (composer.value ? composer.value.trimEnd() + '\n\n' : '') + action : createTravelDraft(composer.value, transition, currentLanguage());
+        if (composer.maxLength >= 0 && draft.length > composer.maxLength) {
+            toastr.warning(tr('Действие не помещается в черновик.', 'The action exceeds the draft length limit.'), 'BB Map');
+            return;
+        }
+        composer.value = draft;
+        composer.dispatchEvent(new Event('input', { bubbles: true }));
+        removeMapOverlay();
+        composer.focus();
+        composer.setSelectionRange(draft.length, draft.length);
+    };
+    panel.append(route, note, source);
+    if (literary) panel.append(instructionLabel);
+    panel.append(prepare, status);
+}
+
 function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
     mapTravelController?.abort();
     removeMapOverlay();
@@ -680,13 +679,24 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
     overlay.innerHTML = `<div class="bb-map-modal bb-map-graph-modal">
         <header class="bb-map-header-container"><div class="bb-map-title">${escapeHtml(data.schematic_name)}</div>
         <div class="bb-graph-scope">${data.scope === 'scene' ? tr('Текущая сцена', 'Current scene') : tr('Окрестности', 'Surroundings')}</div>
-        <small>${tr('Вы здесь:', 'You are here:')} ${escapeHtml(data.zones.find(zone => zone.id === data.player_place_id)?.name || tr('Положение неизвестно', 'Position unknown'))}</small></header>
-        <div class="bb-graph-content"></div>
+        <small>${tr('Вы здесь:', 'You are here:')} ${escapeHtml(data.zones.find(zone => zone.id === data.player_place_id)?.name || tr('Положение неизвестно', 'Position unknown'))}</small>
+        ${data.atmosphere ? `<div class="bb-header-tags">${data.atmosphere.split('|').map(tag => `<span class="bb-header-tag">${escapeHtml(tag.trim())}</span>`).join('')}</div>` : ''}</header>
+        <div class="bb-graph-content"></div><div id="bb-map-travel"></div>
+        ${!isSavedMap && requiresTopologyReview(expectedMap?.raw, data) ? `<p class="bb-map-change-warning">${tr('Положение или проходы требуют проверки.', 'Position or passages need review.')}</p>` : ''}
         ${mode === 'game' ? mapObjectsHtml(data, isSavedMap) + mapEffectsHtml(data, isSavedMap, expectedMap?.raw) : ''}
         ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
         <div class="bb-map-controls">${!isSavedMap ? `<button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn">${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>` : ''}
-        <button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
-    mapTopologyView = createMapTopologyView(data, { language: currentLanguage() });
+        <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button><button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
+    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), onSelect: place => {
+        if (!isSavedMap || mode !== 'game') return;
+        const route = getMapRoute(data, place.id), panel = overlay.querySelector('#bb-map-travel');
+        if (!route || route.places.length < 2) { panel.className = ''; panel.replaceChildren(); return; }
+        const places = route.places.map(id => data.zones.find(zone => zone.id === id));
+        const edges = route.connections.map(id => data.connections.find(edge => edge.id === id));
+        renderTravelPanel(panel, { from: places[0], to: places.at(-1), routeNames: places.map(place => place.name), routePlaces: places.slice(1) }, chatForMap, expectedMap,
+            '\nSelected established route: ' + places.map(place => place.name).join(' → ') + '\nPassages: ' + edges.map(edge => edge.name + ': ' + edge.evidence).join('; '));
+    } });
+    overlay.querySelector('#bb-map-edit-btn').onclick = () => showMapEditor(data, isSavedMap, chatForMap, expectedMap);
     overlay.querySelector('.bb-graph-content').append(mapTopologyView.element);
     const close = () => {
         mapTopologyView?.destroy(); mapTopologyView = null; overlay.remove();
@@ -714,7 +724,13 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
     requestAnimationFrame(() => { if (overlay.isConnected) { overlay.style.opacity = '1'; overlay.querySelector('.bb-topology-place')?.focus({ preventScroll: true }); } });
 }
 
+function topologyValueLabel(value) {
+    const labels = { room: ['Помещение','Room'], outdoor: ['Открытое место','Outdoors'], passage: ['Проход','Passage'], area: ['Участок','Area'], unknown: ['Неизвестно','Unknown'], door: ['Дверь','Door'], path: ['Тропинка','Path'], stairs: ['Ступени','Stairs'], opening: ['Проём','Opening'], confirmed: ['Подтверждён','Confirmed'], uncertain: ['Не подтверждён','Unconfirmed'], blocked: ['Заблокирован','Blocked'], both: ['В обе стороны','Both ways'], forward: ['Откуда → куда','From → to'] };
+    return labels[value] ? tr(...labels[value]) : value;
+}
+
 function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
+    const graph = data.layout === 'graph', modeForEditor = getMapMode(chat_metadata);
     mapTravelController?.abort();
     removeMapOverlay();
     const overlay = document.createElement('div');
@@ -751,7 +767,11 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     const scene = form.querySelector('.bb-map-edit-fields');
     field(scene, 'schematic_name', data.schematic_name, null, true);
     field(scene, 'atmosphere', data.atmosphere);
-    const destinations = data.zones.map((zone, index) => [String(index), `${zone.name} · ${mapPositionLabel(zone.position)}`]);
+    const destinations = data.zones.map((zone, index) => [String(index), graph ? zone.name : `${zone.name} · ${mapPositionLabel(zone.position)}`]);
+    if (graph) {
+        field(scene, 'scope', data.scope, [['scene', tr('Текущая сцена', 'Current scene')], ['surroundings', tr('Окрестности', 'Surroundings')]]);
+        field(scene, 'player_place_id', data.player_place_id || '', [['', tr('Положение неизвестно', 'Position unknown')], ...data.zones.map(zone => [zone.id, zone.name])]);
+    }
     const editObjects = getMapMode(chat_metadata) === 'game';
     const addEntity = (target, type, entry, zoneIndex) => {
         const block = document.createElement('fieldset');
@@ -779,15 +799,35 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         target.append(block);
         return block;
     };
-    data.zones.forEach((zone, index) => {
+    const editorZones = data.zones.map(zone => ({ ...zone }));
+    const refreshPlaces = () => {
+        if (!graph) return;
+        const available = [...form.querySelectorAll('[data-zone-index]')].map(section => {
+            const index = Number(section.dataset.zoneIndex);
+            return { index, id: editorZones[index].id, name: section.querySelector('[name="name"]').value };
+        });
+        for (const select of form.querySelectorAll('select[name="destination"], select[name="from"], select[name="to"], select[name="player_place_id"]')) {
+            const value = select.value, byIndex = select.name === 'destination';
+            const choices = available.map(zone => [byIndex ? String(zone.index) : zone.id, zone.name]);
+            if (byIndex || select.name === 'player_place_id') choices.unshift(['', tr('Неизвестно', 'Unknown')]);
+            select.replaceChildren(...choices.map(([value, name]) => { const option = document.createElement('option'); option.value = value; option.textContent = name; return option; }));
+            select.value = choices.some(([key]) => key === value) ? value : '';
+        }
+    };
+    const addZone = (zone, index) => {
         const section = document.createElement('details');
         section.className = 'bb-map-edit-zone';
         section.dataset.zoneIndex = index;
         section.open = index === 0;
-        section.innerHTML = `<summary>${escapeHtml(zone.name)} <small>${mapPositionLabel(zone.position)}</small></summary><div class="bb-map-edit-zone-body"></div>`;
+        section.innerHTML = `<summary>${escapeHtml(zone.name)} <small>${graph ? topologyValueLabel(zone.kind) : mapPositionLabel(zone.position)}</small></summary><div class="bb-map-edit-zone-body"></div>`;
         const body = section.querySelector('.bb-map-edit-zone-body');
         field(body, 'name', zone.name, null, true);
+        if (graph) body.querySelector('[name="name"]').addEventListener('input', refreshPlaces);
         field(body, 'summary', zone.summary);
+        if (graph) {
+            field(body, 'kind', zone.kind, ['room', 'outdoor', 'passage', 'area', 'unknown'].map(value => [value, topologyValueLabel(value)]));
+            field(body, 'uncertain', String(!!zone.uncertain), [['false', tr('Подтверждено', 'Confirmed')], ['true', tr('Не подтверждено', 'Unconfirmed')]]);
+        }
         field(body, 'threat_level', zone.threat_level || 'safe', ['safe', 'tension', 'danger'].map(value => [value, mapThreatLabel(value)]));
         field(body, 'threat_reason', zone.threat_reason);
         const entities = document.createElement('div');
@@ -806,8 +846,48 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             actions.append(button);
         }
         body.append(actions);
+        if (graph) {
+            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'bb-map-edit-remove';
+            remove.textContent = tr('Убрать место', 'Remove place');
+            remove.onclick = () => { section.remove(); refreshPlaces(); };
+            body.append(remove);
+        }
         form.querySelector('.bb-map-edit-zones').append(section);
-    });
+        return section;
+    };
+    editorZones.forEach(addZone);
+    if (graph) {
+        const addPlace = document.createElement('button'); addPlace.type = 'button'; addPlace.className = 'bb-map-btn';
+        addPlace.textContent = tr('+ Место', '+ Place');
+        addPlace.onclick = () => {
+            if (form.querySelectorAll('[data-zone-index]').length >= 24) return;
+            const index = editorZones.length, zone = { id: `new-${index}`, name: tr('Новое место', 'New place'), kind: 'area', poi: [], characters: [], uncertain: true };
+            editorZones.push(zone); destinations.push([String(index), zone.name]);
+            const section = addZone(zone, index); section.open = true; refreshPlaces(); section.querySelector('[name="name"]').focus();
+        };
+        form.querySelector('.bb-map-edit-zones').append(addPlace);
+        const edges = document.createElement('details'); edges.className = 'bb-map-edit-zone'; edges.open = true;
+        edges.innerHTML = '<summary>' + tr('Проходы', 'Passages') + '</summary><div class="bb-map-edit-entities"></div>';
+        const addEdge = (edge = {}) => {
+            const block = document.createElement('fieldset'); block.dataset.connection = ''; block._edge = edge;
+            const places = [...form.querySelectorAll('[data-zone-index]')].map(section => [editorZones[Number(section.dataset.zoneIndex)].id, section.querySelector('[name="name"]').value]);
+            if (!places.length) return;
+            field(block, 'name', edge.name, null, true);
+            field(block, 'from', edge.from || places[0][0], places);
+            field(block, 'to', edge.to || places.at(-1)[0], places);
+            field(block, 'kind', edge.kind || 'passage', ['door','path','stairs','opening','passage','unknown'].map(value => [value, topologyValueLabel(value)]));
+            field(block, 'status', edge.status || 'uncertain', ['confirmed','uncertain','blocked'].map(value => [value, topologyValueLabel(value)]));
+            field(block, 'direction', edge.direction || 'both', ['both','forward'].map(value => [value, topologyValueLabel(value)]));
+            field(block, 'evidence', edge.evidence);
+            const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'bb-map-edit-remove';
+            remove.textContent = tr('Убрать проход', 'Remove passage'); remove.onclick = () => block.remove(); block.append(remove);
+            edges.querySelector('div').append(block); refreshPlaces();
+        };
+        for (const edge of data.connections) addEdge(edge);
+        const add = document.createElement('button'); add.type = 'button'; add.className = 'bb-map-btn';
+        add.textContent = tr('+ Проход', '+ Passage'); add.onclick = () => { edges.open = true; addEdge(); };
+        edges.append(add); form.querySelector('.bb-map-edit-zones').append(edges);
+    }
     if (data.unlocated_objects?.length) {
         const memory = document.createElement('div');
         memory.className = 'bb-map-edit-entities';
@@ -854,14 +934,20 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     form.onsubmit = event => {
         event.preventDefault();
         try {
-            if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap) {
+            if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap || getMapMode(chat_metadata) !== modeForEditor) {
                 throw new Error(tr('Чат или сохранённая карта изменились. Откройте карту заново.', 'The chat or saved map changed. Reopen the map.'));
             }
             const readFields = target => Object.fromEntries([...target.querySelectorAll(':scope > label > input, :scope > label > textarea, :scope > label > select')]
                 .map(input => [input.name, input.value]));
-            const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: [...form.querySelectorAll('.bb-map-edit-zone[data-zone-index]')].map((section, index) => ({
-                ...readFields(section.querySelector('.bb-map-edit-zone-body')), position: data.zones[index].position, poi: [], characters: [],
+            const sections = [...form.querySelectorAll('.bb-map-edit-zone[data-zone-index]')];
+            const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: sections.map(section => ({
+                ...readFields(section.querySelector('.bb-map-edit-zone-body')), ...(graph ? { id: editorZones[Number(section.dataset.zoneIndex)].id } : { position: data.zones[Number(section.dataset.zoneIndex)].position }), poi: [], characters: [],
             })) };
+            if (graph) {
+                draft.layout = 'graph'; draft.player_place_id ||= null;
+                draft.zones.forEach(zone => { zone.uncertain = zone.uncertain === 'true'; });
+                draft.connections = [...form.querySelectorAll('[data-connection]')].map(block => ({ ...block._edge, ...readFields(block) }));
+            }
             for (const block of form.querySelectorAll('[data-entity-type]')) {
                 const { destination, ...fields } = readFields(block);
                 const entry = { ...block._originalEntry, ...fields };
@@ -873,14 +959,16 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
                         continue;
                     }
                 }
-                draft.zones[Number(destination)][block.dataset.entityType === 'character' ? 'characters' : 'poi'].push(entry);
+                const index = sections.findIndex(section => section.dataset.zoneIndex === destination);
+                if (index < 0) throw new Error('invalid_map');
+                draft.zones[index][block.dataset.entityType === 'character' ? 'characters' : 'poi'].push(entry);
             }
             if (data.unlocated_objects && !draft.unlocated_objects) draft.unlocated_objects = [];
             if (editObjects) draft.effects = [...form.querySelectorAll('[data-effect]')].map(block => ({
                 ...readFields(block), uncertain: false, evidence: readFields(block).evidence || tr('Подтверждено игроком при правке карты.', 'Confirmed by the player in the map editor.'),
             }));
             else if (data.effects) draft.effects = data.effects;
-            const edited = normalizeMapData(draft, expectedMap?.raw);
+            const edited = graph ? normalizeGraphMapData(draft, data) : normalizeMapData(draft, expectedMap?.raw);
             if (editObjects && edited.effects.some(effect => effect.status === 'active'
                 && !isMapEffectApplicable(effect, edited, chatForMap.name1))) throw new Error('invalid_effects');
             if (autoCandidate === data) autoCandidate = edited;
@@ -890,7 +978,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             message.hidden = false;
             message.textContent = error.message === 'invalid_effects'
                 ? tr('Для эффекта нужны название, описание, источник, условие окончания и точное имя текущей сцены, зоны или персонажа (включая игрока). Не более 16 эффектов, поля до 1500 символов.', 'Effects need a name, description, source, end condition and exact current scene, zone or character/player name. Up to 16 effects, fields up to 1500 characters.') : error.message === 'invalid_map'
-                ? tr('Проверьте названия и положение. Для предмета у персонажа нужен владелец, для оставленного вне сцены — основание. Состояние «В зоне» требует выбора зоны.', 'Check names and whereabouts. Held objects need a holder; objects left outside the scene need evidence. In the zone requires a selected zone.') : error.message;
+                ? graph ? tr('Проверьте места и проходы: у каждого прохода нужны разные существующие концы, а подтверждённому или закрытому проходу — основание. Не более 24 мест и 48 проходов.', 'Check places and passages: endpoints must be different existing places; confirmed or blocked passages need evidence. Up to 24 places and 48 passages.') : tr('Проверьте названия и положение. Для предмета у персонажа нужен владелец, для оставленного вне сцены — основание. Состояние «В зоне» требует выбора зоны.', 'Check names and whereabouts. Held objects need a holder; objects left outside the scene need evidence. In the zone requires a selected zone.') : error.message;
             message.scrollIntoView({ block: 'nearest' });
         }
     };
@@ -902,38 +990,32 @@ async function createMapCandidate(chatForScan, scaleMode) {
     const chat = chatForScan.chat;
     const recentMessages = chat.slice(-3).map(m => `${m.name}: ${m.mes}`).join('\n\n');
     
-    let scaleInstruction = "";
-    if (scaleMode === 'global') {
-        scaleInstruction = `[CRITICAL MACRO SCALE]: Map the ENTIRE building/district. "center" is the current room as a whole. You MUST populate ALL 8 surrounding zones (north, south, east, west, northwest, northeast, southwest, southeast) with logical adjacent rooms, corridors, facilities, or outdoor areas to fill the entire 3x3 grid. Invent logical surrounding locations if they aren't in the chat. DO NOT LEAVE ZONES EMPTY.`;
-    } else {
-        scaleInstruction = `[CRITICAL MICRO SCALE]: Map strictly the IMMEDIATE single room. "center" is the exact spot the characters are standing. "north/south/east/west" and corners are just different walls/areas of this SAME room.`;
-    }
-
     const prevData = getMapDataForCurrentChat();
     const modeForScan = getMapMode(chat_metadata);
-    if (modeForScan === 'game' && scaleMode === 'global') {
-        scaleInstruction = 'Map the nearby established rooms or outdoor areas of the building/district. Center is the player\'s current room. Include only adjacent zones supported by the scene; omit unknown surroundings.';
-    }
+    const scope = ['global', 'surroundings'].includes(scaleMode) ? 'surroundings' : 'scene';
+    const scaleInstruction = scope === 'surroundings'
+        ? 'Use scope "surroundings": include nearby established rooms, outdoor places and the passages connecting them.'
+        : 'Use scope "scene": include places within the immediate scene and its established entrances.';
     let prevMapInstruction = "";
     if (prevData && prevData.context) {
         const previousContext = prevData.raw ? buildMapContextString(activeMapObjects(prevData.raw))
             + (modeForScan === 'game' ? buildMapEffectsContext(prevData.raw, chatForScan.name1) : '') : prevData.context;
-        prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${previousContext}\n"""\nCRITICAL: Maintain logical spatial continuity! If characters moved, shift the focus logically (e.g. what was 'north' might now be 'center' or 'south'). Do NOT just copy it, adapt it to the latest events.\n</previous_topology>\n`;
+        prevMapInstruction = `\n<previous_topology>\nThis was the LAST known map state:\n"""\n${previousContext}\n"""\nMaintain established places and IDs within the current scene, and update the player position only after narrative movement. Adapt to current events; do not copy obsolete surroundings.\n</previous_topology>\n`;
     }
 
     const prompt = MAP_PROMPT
         .replace('{{lastMessages}}', recentMessages)
-        .replace('{{scaleInstruction}}', scaleInstruction + (modeForScan === 'game'
-            ? '\nGAME MODE: Center the map on the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current grid may be listed in top-level unlocated_objects with the same fields and state held, unknown, or left (with evidence); never invent a zone to hold them.' : ''))
+        .replace('{{scaleInstruction}}', scaleInstruction + `\nThe player's exact name is ${JSON.stringify(chatForScan.name1 || '')}.` + (modeForScan === 'game'
+            ? '\nGAME MODE: Set player_place_id to the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current scene may be listed in top-level unlocated_objects with the same fields and state held, unknown, or left (with evidence); never invent a zone to hold them.' : ''))
         .replace('{{previousMap}}', prevMapInstruction);
     const objectScopeRules = modeForScan === 'game'
-        ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current grid, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
+        ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current scene, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
     const effectRules = modeForScan === 'game'
         ? '\nTEMPORARY EFFECTS: Return a top-level effects array (max 16). Each effect has name, scope (scene, zone, or character), target (exact schematic_name, zone name, or character/player name), description (brief circumstance, no numerical penalty), source (established cause), expires_when (concrete narrative end condition), status (active or ended), evidence (supporting narrative event), and uncertain (boolean). Do not invent effects, stats, damage, rolls, timers or player actions. Environmental effects belong to their scene/zone, not a traveling character; bodily or mental states may belong to a character. Retain previously active effects while applicable; omission alone is not an ending. Report ended only when a story event satisfies the end condition, with evidence; mark uncertain true for ambiguous changes. Empty effects means no new reported effects; previous applicable states remain until an established ending. Do not revive ended effects or retain states of departed characters/old zones.' : '';
     const result = await generateMapFast(prompt + objectScopeRules + effectRules);
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan) return null;
-    const candidate = normalizeMapData(extractJSON(result), prevData?.raw);
+    const candidate = normalizeGraphMapData(extractJSON(result), prevData?.raw);
     const objects = modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
         ? reconcileMapObjects(candidate, prevData?.raw, chatForScan.name1) : candidate;
     if (modeForScan === 'game') return reconcileMapEffects(objects, prevData?.raw, chatForScan.name1);
@@ -941,7 +1023,7 @@ async function createMapCandidate(chatForScan, scaleMode) {
     return prevData?.raw?.effects ? { ...classic, effects: prevData.raw.effects } : classic;
 }
 
-async function triggerMapScan(btnElement, scaleMode = 'local') {
+async function triggerMapScan(btnElement, scaleMode = 'scene') {
     if (btnElement.disabled || scanInProgress) return;
     const chatForScan = SillyTavern.getContext();
     if (!chatForScan.chat?.length) {
@@ -1018,7 +1100,7 @@ function queueAutoScan(chatForScan) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
                 return;
             }
-            if (settings.autoApply && !hasLegacyObjectMemory(baseMap.raw)
+            if (settings.autoApply && !hasLegacyObjectMemory(baseMap.raw) && !requiresTopologyReview(baseMap.raw, candidate)
                 && !(getMapMode(chat_metadata) === 'game' && (requiresObjectReview(baseMap.raw, candidate, chatForScan.name1)
                     || requiresEffectReview(baseMap.raw, candidate)))) {
                 chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
@@ -1264,8 +1346,8 @@ function setupExtensionSettings(rebuild = false) {
     note(mapTools, savedMap?.context
         ? tr('Память локации активна.', 'Location memory is active.')
         : tr('Память локации пуста.', 'Location memory is empty.'));
-    select(mapTools, tr('Масштаб нового скана', 'New scan scale'), settings.scanScale,
-        [['local', tr('Комната', 'Room')], ['global', tr('Здание', 'Building')]], value => {
+    select(mapTools, tr('Охват нового скана', 'New scan scope'), settings.scanScale,
+        [['scene', tr('Текущая сцена', 'Current scene')], ['surroundings', tr('Окрестности', 'Surroundings')]], value => {
             settings.scanScale = value;
             saveSettingsDebounced();
         });
@@ -1456,15 +1538,27 @@ function setupExtensionSettings(rebuild = false) {
     if (!existing) target.append(panel);
 }
 
+function graphWidgetHtml(raw) {
+    const current = raw.zones.find(zone => zone.id === raw.player_place_id);
+    const edges = raw.connections.filter(edge => edge.from === current?.id || edge.to === current?.id);
+    const neighbours = [...new Set(edges.map(edge => edge.from === current?.id ? edge.to : edge.from))];
+    return '<div class="bb-map-widget-places">' + (current ? '<span class="bb-map-widget-place is-current"><small>' + tr('Вы здесь', 'You are here') + '</small>' + escapeHtml(current.name) + '</span>'
+        : '<small>' + tr('Положение неизвестно', 'Position unknown') + '</small>')
+        + neighbours.slice(0,4).map(id => { const place = raw.zones.find(zone => zone.id === id), edge = edges.find(edge => edge.from === id || edge.to === id);
+            return '<button type="button" class="bb-map-widget-place is-' + place.kind + '" data-place-id="' + id + '"><small>' + escapeHtml(edge.name) + ' · ' + topologyValueLabel(edge.status) + '</small><span>' + escapeHtml(place.name) + '</span></button>';
+        }).join('') + (neighbours.length > 4 ? '<small>+' + (neighbours.length - 4) + ' ' + tr('на полной карте','on the full map') + '</small>' : '') + '</div>';
+}
+
 function renderMapWidget() {
     chatMapLinks?.refresh();
     document.getElementById('bb-map-widget')?.remove();
     const mapData = getMapDataForCurrentChat();
     if (!settings.showWidget || !Array.isArray(mapData?.raw?.zones)) return;
 
-    const raw = mapData.raw;
+    let raw;
+    try { raw = readMapState(mapData); } catch { return; }
     const zones = new Map(raw.zones.filter(zone => zone && WIDGET_POSITIONS.includes(zone.position)).map(zone => [zone.position, zone]));
-    const center = zones.get('center');
+    const center = raw.layout === 'graph' ? raw.zones.find(zone => zone.id === raw.player_place_id) : zones.get('center');
     const danger = raw.zones.some(zone => zone?.threat_level === 'danger');
     const tension = !danger && raw.zones.some(zone => zone?.threat_level === 'tension');
     const level = danger ? 'danger' : tension ? 'tension' : 'safe';
@@ -1484,7 +1578,7 @@ function renderMapWidget() {
         </div>
         <div class="bb-map-widget-content" ${settings.widgetCollapsed ? 'hidden' : ''}>
             <div class="bb-map-widget-meta"><span>${escapeHtml(raw.schematic_name)}</span><span class="bb-map-widget-threat">${threatText}</span></div>
-            <div class="bb-map-widget-grid" aria-label="${tr('Схема зон', 'Zone grid')}">
+            ${raw.layout === 'graph' ? graphWidgetHtml(raw) : `            <div class="bb-map-widget-grid" aria-label="${tr('Схема зон', 'Zone grid')}">
                 ${WIDGET_POSITIONS.map(position => {
                     const zone = zones.get(position);
                     const name = zone?.name || '';
@@ -1492,6 +1586,7 @@ function renderMapWidget() {
                     return `<span class="bb-map-widget-cell ${zone ? `is-${threatClass}` : 'is-empty'} ${position === 'center' ? 'is-center' : ''}" title="${escapeHtml(name)}">${escapeHtml(name || '·')}</span>`;
                 }).join('')}
             </div>
+`}
             ${settings.autoUpdate && autoStatus !== 'idle' ? `<div class="bb-map-widget-update" role="status">${autoStatus === 'scanning'
                 ? tr('Готовится обновление карты…', 'Preparing a map update…')
                 : autoStatus === 'waiting'
@@ -1534,6 +1629,10 @@ function renderMapWidget() {
         const current = getMapDataForCurrentChat();
         if (current?.raw) showRadarModal(current.raw, true);
         else renderMapWidget();
+    };
+    for (const button of widget.querySelectorAll('[data-place-id]')) button.onclick = () => {
+        const current = getMapDataForCurrentChat();
+        if (current?.raw) { showRadarModal(current.raw, true); mapTopologyView?.select(button.dataset.placeId); }
     };
     const review = widget.querySelector('.bb-map-widget-review');
     if (review) review.onclick = () => {
@@ -1595,9 +1694,9 @@ jQuery(async () => {
                 position: mapPositionLabel, threat: mapThreatLabel,
                 objectState: mapObjectLabel,
             }),
-            onOpenMap: () => {
+            onOpenMap: entry => {
                 const current = getMapDataForCurrentChat();
-                if (current?.raw) showRadarModal(current.raw, true);
+                if (current?.raw) { showRadarModal(current.raw, true); mapTopologyView?.select(entry?.placeId); }
             },
         });
         for (const type of [event_types.CHAT_LOADED, event_types.MORE_MESSAGES_LOADED, event_types.USER_MESSAGE_RENDERED,

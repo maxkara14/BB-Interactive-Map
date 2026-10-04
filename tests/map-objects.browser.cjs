@@ -15,7 +15,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<body style="background:#10151b;color:#e2e8f0"><div id="chat"><div class="mes"><div class="mes_text">Мира взяла Боккэн.</div></div></div></body>');
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}
+        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
             var extension_settings = { 'BB-Interactive-Map': { uiLanguage: 'ru', autoUpdate: true, autoApply: true, showWidget: false } };
             var chat_metadata = { bb_map_mode: 'game' };
             var messages = Object.freeze([Object.freeze({ name: 'Мира', mes: 'Мира берёт меч.' })]);
@@ -24,7 +24,9 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             var writes = 0, requests = 0, notices = [], requestedPrompt = '', response;
             var saveChatDebounced = () => writes++, saveChatConditional = async () => writes++;
             var isChatSaving = false, saveSettingsDebounced = () => {};
-            var generateQuietPrompt = async params => { requests++; requestedPrompt = params.quietPrompt; return JSON.stringify(response); };
+            function responseForGraph() { return { ...response, layout: 'graph', scope: 'scene', player_place_id: response.zones[0]?.position || null,
+                zones: response.zones.map(zone => ({ ...zone, id: zone.position, kind: 'room' })), connections: [] }; }
+            var generateQuietPrompt = async params => { requests++; requestedPrompt = params.quietPrompt; return JSON.stringify(responseForGraph()); };
             var toastr = { error: message => notices.push(message), success: () => {}, warning: message => notices.push(message) };
             ${strip(read('index.js').split('jQuery(async () => {')[0])}
             injectCurrentMapContext = () => {}; renderMapWidget = () => {}; setupExtensionSettings = () => {};
@@ -101,7 +103,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         await page.waitForFunction(() => autoStatus === 'updated' && chat_metadata.bb_map_data.raw.zones[0].poi[0].item_state === 'held');
         assert.equal(await page.evaluate(() => writes), 4);
         await page.evaluate(async () => {
-            generateQuietPrompt = async () => { context = { ...context, chatId: 'other' }; return JSON.stringify(response); };
+            generateQuietPrompt = async () => { context = { ...context, chatId: 'other' }; return JSON.stringify(responseForGraph()); };
             const result = await createMapCandidate(context, 'local');
             if (result !== null) throw Error('Stale candidate escaped');
         });
@@ -129,7 +131,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             globalThis.legacy = chat_metadata.bb_map_data;
             if (getMapContextForCurrentChat().includes('Старые половицы')) throw Error('Legacy context leaked');
             response = { schematic_name: 'Сад', zones: [{ position: 'center', name: 'Дорожка', poi: [{ name: 'Гравий', item_state: 'zone' }] }] };
-            generateQuietPrompt = async params => { requestedPrompt = params.quietPrompt; return JSON.stringify(response); };
+            generateQuietPrompt = async params => { requestedPrompt = params.quietPrompt; return JSON.stringify(responseForGraph()); };
             queueAutoScan(context);
         });
         await page.waitForFunction(() => autoStatus === 'ready');

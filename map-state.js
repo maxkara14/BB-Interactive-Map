@@ -180,6 +180,12 @@ export function buildMapEffectsContext(raw, playerName = '') {
     return `\n[Temporary scene effects: ${effects.map(effect => `${effect.name}; target (${effect.scope}): ${effect.target}; description: ${effect.description}; source: ${effect.source}; ends when: ${effect.expires_when}`).join(' | ')}. These are narrative circumstances, not automatic damage, penalties, rolls, or permission to act for the player.]`;
 }
 
+export function requiresTopologyReview(previous, next) {
+    if (next?.layout !== 'graph') return false;
+    return !next.player_place_id || next.zones.some(zone => zone.uncertain)
+        || next.connections.some(edge => edge.status === 'uncertain');
+}
+
 export function requiresObjectReview(previous, next, playerName = '') {
     if (hasLegacyObjectMemory(previous)) return true;
     const changed = getMapChanges(previous, next).filter(change => change.type === 'object');

@@ -177,6 +177,11 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
         if (node.uncertain) paragraph('', tr('Сведения о месте не подтверждены.', 'The place information is unconfirmed.'));
         paragraph('', node.summary);
         paragraph(tr('Персонажи', 'Characters'), node.characters.map(char => `${char.name}${char.mood ? ' · ' + char.mood : ''}`).join('; '));
+        for (const char of node.characters) {
+            paragraph(char.name, char.description);
+            if (char.attitude) paragraph(tr('Отношение', 'Attitude'), char.attitude);
+            if (char.thought) paragraph(tr('Мысль', 'Thought'), char.thought);
+        }
         paragraph(tr('Предметы', 'Objects'), node.poi.map(item => `${poiName(item)}${item.description ? ' — ' + item.description : ''}`).join('; '));
         paragraph(tr('Маршрут', 'Route'), selected === raw.player_place_id ? tr('Текущее место', 'Current place')
             : route ? route.places.map(id => byId.get(id).name).join(' → ')
@@ -188,5 +193,8 @@ export function createMapTopologyView(raw, { language = 'ru', onSelect = () => {
         if (focusedId) places.querySelector(`[data-place-id="${focusedId}"]`)?.focus({ preventScroll: true });
     }
     const observer = new ResizeObserver(draw); observer.observe(field);
-    return { element, refresh: draw, destroy: () => observer.disconnect() };
+    return { element, refresh: draw, select: id => {
+        if (!raw.zones.some(zone => zone.id === id)) return;
+        selected = id; draw(); onSelect(raw.zones.find(zone => zone.id === id));
+    }, destroy: () => observer.disconnect() };
 }

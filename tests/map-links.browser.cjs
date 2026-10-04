@@ -8,6 +8,7 @@ const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const state = read('map-state.js').replace(/^export /gm, '');
 const links = read('map-links.js').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+const topology = read('map-topology-view.js').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const source = read('index.js').replace(/^import .*;\r?\n/gm, '');
 const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js'), 'utf8')
     .match(/export const event_types = (\{[\s\S]*?\r?\n\});/)[1];
@@ -31,7 +32,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
             </div></article></main><div id="extensions_settings" hidden></div></body>`);
         const initialText = await page.locator('.mes_text').textContent();
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${state}\n${links}
+        await page.addScriptTag({ content: `${state}\n${links}\n${topology}
             var event_types = ${events};
             var handlers = new Map();
             var eventSource = { on: (name, callback) => handlers.set(name, [...(handlers.get(name) || []), callback]) };
@@ -189,6 +190,18 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.waitForTimeout(250);
         assert.equal(await page.locator('#new-reply [data-bb-map-mention]').count(), 2);
         assert.equal(await page.locator('#user-reply [data-bb-map-mention]').count(), 2);
+        await page.evaluate(() => {
+            const graph = normalizeGraphMapData({ layout: 'graph', scope: 'scene', schematic_name: 'Додзё', player_place_id: 'hall', zones: [
+                { id: 'hall', name: 'Зал', kind: 'room' }, { id: 'garden', name: 'Сад', kind: 'outdoor', characters: [{ name: 'Аой Кандзаки' }], poi: ['Кедровые половицы'] }
+            ], connections: [{ from: 'hall', to: 'garden', name: 'Дверь', kind: 'door', status: 'confirmed', evidence: 'Дверь открыта.' }] });
+            chat_metadata.bb_map_data = createSavedMap(graph); renderMapWidget();
+        });
+        await page.locator('#new-reply [data-bb-map-mention]').first().click();
+        assert.match(await page.locator('.bb-map-mention-location').innerText(), /Сад/);
+        assert.doesNotMatch(await page.locator('.bb-map-mention-location').innerText(), /undefined|bbp-/);
+        await page.locator('.bb-map-mention-open').click();
+        assert.equal(await page.locator('.bb-topology-place[aria-pressed="true"]').getAttribute('title'), 'Сад');
+        await page.keyboard.press('Escape');
         await page.evaluate(() => chatMapLinks.destroy());
         assert.equal(await mentions.count(), 0);
         assert.equal(await page.locator('.mes_text').first().textContent(), initialText);

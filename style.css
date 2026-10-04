@@ -465,3 +465,29 @@
 @media (max-width: 600px) {
     .bb-map-mention-card { left: 8px; right: 8px; bottom: 12px; width: auto; max-height: 60vh; border-top-width: 2px; }
 }
+.bb-map-widget-places {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    padding: 4px 0 10px;
+}
+.bb-map-widget-place {
+    min-width: 0;
+    padding: 8px 6px;
+    border: 1px solid #365356;
+    border-radius: 7px;
+    background: #142124;
+    color: #d7ecee;
+    font: inherit;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+    text-align: center;
+}
+.bb-map-widget-place small { display: block; color: #86abad; font-size: 10px; margin-bottom: 4px; }
+.bb-map-widget-place.is-current { grid-column: 1 / -1; border-color: #65cecb; background: #1a3638; }
+.bb-map-widget-place.is-outdoor { border-radius: 24px 18px 26px 16px; border-style: dashed; }
+.bb-map-widget-place.is-passage { border-radius: 2px; }
+.bb-map-widget-place:focus-visible { outline: 2px solid #65cecb; outline-offset: 2px; }
+.bb-map-widget-place:hover { background: #223a3d; }
+
+.bb-map-widget-place[data-place-id]:only-of-type { grid-column: 1 / -1; }

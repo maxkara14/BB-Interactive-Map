@@ -118,6 +118,7 @@ test('automatic scan follows character replies and saves only in automatic mode'
         createSavedMap: (candidate, previous) => ({ raw: candidate, previous }),
         getMapMode: (await import('../map-state.js')).getMapMode,
         hasLegacyObjectMemory: (await import('../map-state.js')).hasLegacyObjectMemory,
+        requiresTopologyReview: (await import('../map-state.js')).requiresTopologyReview,
         SillyTavern: { getContext: () => activeChat },
         navigator: { language: 'en-US' },
         document: { body: { dataset: {} } },

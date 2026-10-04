@@ -1,8 +1,7 @@
 # Local topology format (v3)
 
-This is the data foundation for the approved places-and-passages map. The full-map
-renderer and change preview can display validated v3 data. Live generation, editing,
-the widget and travel controls still use the v2 grid until their integration is ready.
+The approved places-and-passages map uses v3 for new scans, previews, editing,
+widgets and travel. Existing grids remain readable until a new scan is saved.
 Extension release versions are separate from this format.
 
 ## Saved envelope
@@ -101,12 +100,23 @@ through the existing separate context function. `createSavedMap` selects envelop
 version 3 for graphs and version 2 for grids; `restorePreviousMap` can switch between
 them without converting either snapshot.
 
-## Next integration gates
+## Live integration
 
-Before enabling graph scans in the live UI, adapt topology change review and
-uncertainty gates, the editor, widget, mention links, travel context and
-Enhance bridge. Layout is derived by the extension; the model supplies semantic
-places and established links. Old grids stay readable throughout this work.
+All three generation sources use the English graph contract. Scope settings map
+legacy local/global choices to scene/surroundings. Unknown position or uncertain
+places/connections pause automatic saving in either mode. Confirmed and blocked
+passages require narrative evidence. Layout is derived by the extension; the model
+supplies semantic places and established links.
+
+The editor supports place types, explicit player position, entities and passage
+endpoints/status/direction/evidence. Dangling endpoints are rejected rather than
+reassigned. Changes remain previews until saved. The widget shows the current
+place and up to four directly connected neighbors; mention cards select their
+place on the full map. Game travel follows confirmed connections. The panel warns
+about threats in intermediate places as well as the destination. Simple text
+includes intermediate places; Enhance receives the selected route and passage
+evidence through the existing mapContext API. Both leave player position
+unchanged until narrative events and a saved scan.
 
 `createMapTopologyView` renders the graph using native place buttons, typed outlines,
 direction/status marks and a selection card. Routes highlight only confirmed edges;

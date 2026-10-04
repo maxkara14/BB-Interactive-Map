@@ -1,13 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeGraphMapData, normalizeMapData, readMapState, createSavedMap, restorePreviousMap,
-    getMapRoute, buildMapContextString, reconcileMapObjects, reconcileMapEffects } from '../map-state.js';
+    getMapRoute, buildMapContextString, reconcileMapObjects, reconcileMapEffects, requiresTopologyReview } from '../map-state.js';
 
 const place = (id, name = id, extra = {}) => ({ id, name, kind: 'room', ...extra });
 const passage = (from, to, extra = {}) => ({ from, to, name: 'Door', kind: 'door', status: 'confirmed', evidence: 'An open door joins the rooms.', ...extra });
 const input = extra => ({ layout: 'graph', scope: 'scene', schematic_name: 'House', player_place_id: 'hall',
     zones: [place('hall', 'Hall'), place('garden', 'Garden', { kind: 'outdoor' }), place('clinic', 'Clinic')],
     connections: [passage('hall', 'garden'), passage('garden', 'clinic', { kind: 'path', name: 'Footpath' })], ...extra });
+
+test('automatic topology saving pauses for unknown position, uncertain places or passages', () => {
+    const previous = normalizeGraphMapData(input());
+    assert.equal(requiresTopologyReview(previous, previous), false);
+    assert.equal(requiresTopologyReview(previous, { ...previous, player_place_id: null }), true);
+    assert.equal(requiresTopologyReview(previous, { ...previous, zones: previous.zones.map((zone, i) => ({ ...zone, uncertain: i === 0 })) }), true);
+    assert.equal(requiresTopologyReview(previous, { ...previous, connections: previous.connections.map(edge => ({ ...edge, status: 'uncertain' })) }), true);
+    assert.equal(requiresTopologyReview(previous, { ...previous, connections: previous.connections.map(edge => ({ ...edge, status: 'blocked' })) }), false);
+    assert.equal(requiresTopologyReview(null, normalizeMapData({ schematic_name: 'House', zones: [{ position: 'center', name: 'Hall' }] })), false);
+});
 
 test('graph normalization remaps every reference, retains isolated places and does not mutate input', () => {
     const source = input({ zones: [...input().zones, place('shed', 'Shed')] });

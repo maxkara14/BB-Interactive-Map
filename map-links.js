@@ -17,7 +17,7 @@ export function createMapMentionIndex(raw) {
     };
     for (const zone of Array.isArray(raw?.zones) ? raw.zones : []) {
         if (!zone || typeof zone !== 'object') continue;
-        const location = { zone: zone.name || '', position: zone.position };
+        const location = { zone: zone.name || '', position: zone.position, placeId: raw.layout === 'graph' ? zone.id : undefined };
         if (typeof zone.name === 'string') add({ type: 'zone', name: zone.name.trim(), description: zone.summary || '',
             threat: zone.threat_level || 'safe', reason: zone.threat_reason || '', ...location });
         for (const value of Array.isArray(zone.poi) ? zone.poi : []) {
@@ -203,7 +203,7 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         location.className = 'bb-map-mention-location';
         location.textContent = entry.type === 'object' && entry.item_state && labels.objectState
             ? `📍 ${labels.objectState(entry)}${entry.item_state !== 'unknown' && entry.zone ? ` · ${entry.zone}` : ''}`
-            : `📍 ${entry.zone} · ${labels.position(entry.position)}`;
+            : `📍 ${entry.zone}${entry.placeId ? '' : ' · ' + labels.position(entry.position)}`;
         card.append(tag, heading, close, description, location);
         for (const [field, title] of [['mood', labels.mood], ['attitude', labels.attitude], ['reason', labels.reason]]) {
             if (!entry[field]) continue;
@@ -226,7 +226,7 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         open.type = 'button';
         open.className = 'bb-map-mention-open';
         open.textContent = labels.openMap;
-        open.onclick = () => { closeCard(); onOpenMap(); };
+        open.onclick = () => { closeCard(); onOpenMap(entry); };
         card.append(source, open);
         document.body.append(card);
         if (window.innerWidth > 600) {

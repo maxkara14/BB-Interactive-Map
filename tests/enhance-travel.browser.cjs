@@ -18,7 +18,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.setContent('<body style="background:#111;color:#ddd"><div id="chat"></div><div id="extensions_settings"></div><form id="send_form"><textarea id="send_textarea"></textarea></form></body>');
         await page.addStyleTag({ content: read(root, 'style.css') + read(enhance, 'style.css') });
         await page.addScriptTag({ content: `${['core.js', 'ui.js', 'narrative.js', 'writing.js', 'writing-ui.js', 'd20.js', 'player-action.js'].map(file => strip(read(enhance, file))).join('\n')}
-            ${strip(read(root, 'map-state.js'))}\n${strip(read(root, 'map-links.js'))}
+            ${strip(read(root, 'map-state.js'))}\n${strip(read(root, 'map-links.js'))}\n${strip(read(root, 'map-topology-view.js'))}
             var event_types = ${events}; var handlers = new Map();
             var eventSource = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]) };
             var emit = async (name, ...args) => { for (const fn of handlers.get(event_types[name]) || []) await fn(...args); };
@@ -149,6 +149,32 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.waitForFunction(() => document.getElementById('send_textarea').value === 'Отредактированный черновик.');
         await page.locator('#bb-eg-undo').evaluate(button => button.click());
         assert.equal(await page.locator('#send_textarea').inputValue(), completedDraft);
+        // The same real Enhance API receives a graph route through intermediate places.
+        await page.evaluate(() => {
+            const graph = normalizeGraphMapData({ layout: 'graph', scope: 'surroundings', schematic_name: 'Поместье', player_place_id: 'hall', zones: [
+                { id: 'hall', name: 'Зал', kind: 'room' }, { id: 'gallery', name: 'Галерея', kind: 'passage' }, { id: 'garden', name: 'Сад', kind: 'outdoor' }
+            ], connections: [
+                { from: 'hall', to: 'gallery', name: 'Дверь', kind: 'door', status: 'confirmed', evidence: 'Дверь открыта.' },
+                { from: 'gallery', to: 'garden', name: 'Ступени', kind: 'stairs', status: 'confirmed', evidence: 'Ступени ведут в сад.' }
+            ] });
+            chat_metadata.bb_map_data = createSavedMap(graph, chat_metadata.bb_map_data); globalThis.graphBefore = chat_metadata.bb_map_data;
+            showRadarModal(graph, true); mapTopologyView.select(graph.zones[2].id);
+        });
+        await write(); await page.waitForFunction(() => requests === 11);
+        assert.equal(await page.locator('#bb-map-overlay').count(), 0);
+        const graphParams = await page.evaluate(() => lastParams);
+        assert.match(graphParams.prompt, /Selected established route: Зал → Галерея → Сад/);
+        assert.match(graphParams.prompt, /Ступени ведут в сад/);
+        await page.evaluate(() => finish('Я выхожу в галерею и направляюсь к ступеням в сад.'));
+        await page.waitForFunction(() => mapTravelController === null);
+        assert.match(await page.locator('#send_textarea').inputValue(), /Я выхожу в галерею/);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data === graphBefore), true);
+        await page.evaluate(() => { showRadarModal(graphBefore.raw, true); mapTopologyView.select(graphBefore.raw.zones[2].id); });
+        await write(); await page.waitForFunction(() => requests === 12);
+        await page.locator('#bb-eg-stop').evaluate(button => button.click());
+        await page.evaluate(() => finish('Отменённый графовый переход.'));
+        await page.waitForFunction(() => mapTravelController === null);
+        assert.equal(await page.evaluate(() => writes), 0);
         assert.equal(await page.evaluate(() => originalMessages[0].mes), 'I stand in the hall.');
         assert.deepEqual(errors, []);
         console.log('Both extensions: late API availability, generation, shared limits/style, undo, manual edits, stale map/chat, cancellation, busy lock, and no chat writes passed.');
