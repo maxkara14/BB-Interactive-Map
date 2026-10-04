@@ -1653,7 +1653,7 @@ function renderMapWidget() {
     widget.setAttribute('aria-label', tr('Виджет карты', 'Map widget'));
     widget.innerHTML = `
         <div class="bb-map-widget-header" tabindex="0" aria-label="${tr('Переместить виджет карты стрелками', 'Move map widget with arrow keys')}">
-            <button type="button" class="bb-map-widget-launch${updateReady ? ' has-update' : ''}" aria-label="${launchLabel}" title="${launchLabel}"><svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true" focusable="false"><rect x="3" y="3" width="14" height="14" rx="1"/><rect x="7" y="7" width="6" height="6"/></svg></button>
+            <button type="button" class="bb-map-widget-toggle bb-map-widget-launch${updateReady ? ' has-update' : ''}" aria-label="${launchLabel}" title="${launchLabel}">▣</button>
             <span class="bb-map-widget-signal" aria-hidden="true"></span>
             <span class="bb-map-widget-heading">${escapeHtml(center?.name || raw.schematic_name || tr('Карта', 'Map'))}</span>
             ${autoStatus !== 'idle' && settings.autoUpdate ? `<span class="bb-map-widget-badge" aria-live="polite">${autoStatus === 'scanning'
@@ -1705,7 +1705,7 @@ function renderMapWidget() {
         setPosition(settings.widgetPosition.x, settings.widgetPosition.y);
     }
 
-    widget.querySelector('.bb-map-widget-toggle').onclick = () => {
+    widget.querySelector('.bb-map-widget-toggle:not(.bb-map-widget-launch)').onclick = () => {
         settings.widgetCollapsed = !settings.widgetCollapsed;
         saveSettingsDebounced();
         renderMapWidget();
