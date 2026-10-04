@@ -73,3 +73,8 @@
 
 - [BruniikBron: Lo-Fi & Mods](https://bblofi.online/)
 - [Telegram](https://t.me/Brun11kBr0n)
+
+
+### Контекст карты
+
+API интеграции: `BBInteractiveMap.apiVersion === 1`, `BBInteractiveMap.getContext()` возвращает строку контекста сохранённой карты текущего чата или пустую строку. Чтение не зависит от режима макроса и не изменяет карту. VNE и Enhance подключают контекст отдельными настройками.

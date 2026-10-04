@@ -222,6 +222,9 @@ function getMapContextForCurrentChat() {
     return `${memory}${buildMapEffectsContext(saved?.raw, SillyTavern.getContext().name1)}\n[Game map: ${positionRule} Treat zone threats as circumstances, not predetermined outcomes. A requested transition is an attempt; establish its outcome in the narrative before treating it as completed. Do not invent automatic damage, rolls, or actions for the player.]`;
 }
 
+// Optional read-only integration: always resolve the saved map of the active chat.
+globalThis.BBInteractiveMap = Object.freeze({ apiVersion: 1, getContext: getMapContextForCurrentChat });
+
 // === ИЗМЕНЕНО: Логика инъекции теперь учитывает useMacro ===
 function injectCurrentMapContext() {
     try {
