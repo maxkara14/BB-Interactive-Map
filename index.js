@@ -539,8 +539,6 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         instructionLabel.textContent = tr('Уточнение действия (необязательно)', 'Action detail (optional)');
         instructionLabel.append(instruction);
         const status = document.createElement('p'); status.setAttribute('role', 'status');
-        const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'bb-map-btn'; cancel.hidden = true;
-        cancel.textContent = tr('ОТМЕНИТЬ ГЕНЕРАЦИЮ', 'CANCEL GENERATION');
         if (literary) {
             prepare.textContent = tr('НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', 'WRITE ACTION · ENHANCE');
             source.textContent = tr('Запрос через подключение Enhance Gen. Результат добавится в черновик; отправка вручную.', 'A request through the Enhance Gen connection. The result is appended to your draft; sending is manual.');
@@ -549,7 +547,6 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 status.textContent = tr('Нужен запущенный Enhance Gen с поддержкой действий карты. Обновите оба расширения или выберите простой текст.', 'Requires a running Enhance Gen with map action support. Update both extensions or choose simple text.');
             }
         }
-        cancel.onclick = () => mapTravelController?.abort();
         prepare.onclick = async () => {
             if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
                 || getMapMode(chat_metadata) !== 'game') {
@@ -565,14 +562,13 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                 const api = getEnhanceActionAPI();
                 if (!api || mapTravelController) return;
                 const controller = new AbortController(); mapTravelController = controller;
-                prepare.disabled = true; instruction.disabled = true; cancel.hidden = false;
-                status.textContent = tr('Enhance пишет действие…', 'Enhance is writing the action…');
+                overlay.remove();
+                composer.focus({ preventScroll: true });
                 const isCurrent = () => isSameChat(chatForMap, SillyTavern.getContext())
-                    && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && overlay.isConnected;
+                    && getMapDataForCurrentChat() === expectedMap && getMapMode(chat_metadata) === 'game' && mapTravelController === controller;
                 try {
-                    const result = await api.generatePlayerAction({ kind: 'map_travel', from, to,
+                    await api.generatePlayerAction({ kind: 'map_travel', from, to,
                         mapContext: getMapContextForCurrentChat(), instruction: instruction.value, isCurrent, signal: controller.signal });
-                    if (result?.status === 'applied') overlay.remove();
                 } catch (error) {
                     const messages = {
                         busy: tr('Enhance или таверна уже генерирует. Попробуйте позже.', 'Enhance or SillyTavern is already generating. Try again later.'),
@@ -580,11 +576,12 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
                         stale_chat: tr('Чат изменился. Результат не применён.', 'The chat changed. The result was not applied.'),
                         stale_action: tr('Карта или режим изменились. Результат не применён.', 'The map or mode changed. The result was not applied.'),
                     };
-                    status.textContent = error?.name === 'AbortError' ? tr('Отменено. Черновик сохранён.', 'Cancelled. Your draft is preserved.')
+                    const message = error?.name === 'AbortError' ? tr('Отменено. Черновик сохранён.', 'Cancelled. Your draft is preserved.')
                         : messages[error?.code] || tr('Enhance не смог подготовить действие. Проверьте его подключение и лимит ответа; черновик сохранён.', 'Enhance could not prepare the action. Check its connection and response limit; your draft is preserved.');
+                    if (error?.name === 'AbortError') toastr.info(message, 'BB Map');
+                    else toastr.warning(message, 'BB Map');
                 } finally {
                     if (mapTravelController === controller) mapTravelController = null;
-                    prepare.disabled = false; instruction.disabled = false; cancel.hidden = true;
                 }
                 return;
             }
@@ -601,7 +598,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         };
         panel.append(route, note, source);
         if (literary) panel.append(instructionLabel);
-        panel.append(prepare, cancel, status);
+        panel.append(prepare, status);
     }
 
     const saveBtn = document.getElementById('bb-map-save-btn');

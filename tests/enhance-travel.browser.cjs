@@ -52,6 +52,9 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         const write = () => page.getByRole('button', { name: 'НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', exact: true }).click();
         await write();
         await page.waitForFunction(() => requests === 1);
+        assert.equal(await page.locator('#bb-map-overlay').count(), 0);
+        assert.equal(await page.locator('#bb-eg-stop').evaluate(button => button.hidden), false);
+        assert.equal(await page.locator('#send_textarea').evaluate(input => input === document.activeElement), true);
         assert.equal(await page.locator('#send_textarea').inputValue(), 'Старый текст  ');
         const params = await page.evaluate(() => lastParams);
         assert.equal(params.responseLength, 5000);
@@ -70,23 +73,23 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.evaluate(() => finish('Устаревший ответ.'));
         await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), 'Ручные правки');
-        assert.match(await page.locator('#bb-map-travel [role="status"]').innerText(), /Черновик изменился/);
+        assert.match(await page.evaluate(() => notices.at(-1)), /Черновик изменился/);
 
-        await write(); await page.waitForFunction(() => requests === 3);
+        await open(); await write(); await page.waitForFunction(() => requests === 3);
         await page.evaluate(() => { chat_metadata.bb_map_data = createSavedMap(rawMap); finish('Ответ для старой карты.'); });
         await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), 'Ручные правки');
-        assert.match(await page.locator('#bb-map-travel [role="status"]').innerText(), /Карта или режим изменились/);
+        assert.match(await page.evaluate(() => notices.at(-1)), /Карта или режим изменились/);
 
         await open(); await write(); await page.waitForFunction(() => requests === 4);
-        await page.getByRole('button', { name: 'ОТМЕНИТЬ ГЕНЕРАЦИЮ', exact: true }).click();
+        await page.locator('#bb-eg-stop').evaluate(button => button.click());
         await page.evaluate(() => finish('Отменённый ответ.'));
         await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), 'Ручные правки');
-        assert.match(await page.locator('#bb-map-travel [role="status"]').innerText(), /Отменено/);
+        assert.match(await page.evaluate(() => notices.at(-1)), /Отменено/);
         assert.ok(await page.evaluate(() => stops > 0));
 
-        await write(); await page.waitForFunction(() => requests === 5);
+        await open(); await write(); await page.waitForFunction(() => requests === 5);
         const busy = await page.evaluate(async () => { try { await BBEnhanceGen.generatePlayerAction({ kind: 'map_travel', from: rawMap.zones[0], to: rawMap.zones[1], mapContext: savedMap.context, isCurrent: () => true }); } catch (error) { return error.code; } });
         assert.equal(busy, 'busy');
         await page.evaluate(async () => { context = { ...context, chatId: 'two', chatMetadata: {} }; chat_metadata = context.chatMetadata; await emit('CHAT_CHANGED'); finish('Старый чат.'); });
@@ -113,8 +116,8 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         const screenshots = process.argv[3];
         for (const width of [1440, 390]) {
             await page.setViewportSize({ width, height: 1000 });
-            await page.locator('#bb-map-travel').scrollIntoViewIfNeeded();
-            assert.ok(await page.locator('.bb-map-modal').evaluate(element => element.scrollWidth <= element.clientWidth + 1));
+            assert.equal(await page.locator('#bb-map-overlay').count(), 0);
+            assert.ok(await page.locator('#send_textarea').isVisible());
             if (screenshots) {
                 fs.mkdirSync(screenshots, { recursive: true });
                 await page.screenshot({ path: path.join(screenshots, `enhance-travel-${width}.png`) });
@@ -129,17 +132,17 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), completedDraft);
         assert.equal(await page.evaluate(() => requests), 7); // No fallback for a partial response.
-        await write(); await page.waitForFunction(() => requests === 8);
-        await page.getByRole('button', { name: 'ОТМЕНИТЬ ГЕНЕРАЦИЮ', exact: true }).click();
+        await open(); await write(); await page.waitForFunction(() => requests === 8);
+        await page.locator('#bb-eg-stop').evaluate(button => button.click());
         await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), completedDraft);
         await page.evaluate(() => { extension_settings['BB-Enhance-Gen'].fallbackToMain = false; globalThis.fetch = async () => { requests++; return new Response('{}', { status: 503 }); }; });
-        await write(); await page.waitForFunction(() => mapTravelController === null);
+        await open(); await write(); await page.waitForFunction(() => mapTravelController === null);
         assert.equal(await page.locator('#send_textarea').inputValue(), completedDraft);
         assert.equal(await page.evaluate(() => requests), 9);
         const invalid = await page.evaluate(async () => { try { await BBEnhanceGen.generatePlayerAction({ kind: 'unknown' }); } catch (error) { return error.code; } });
         assert.equal(invalid, 'invalid_action');
-        await page.evaluate(() => { document.getElementById('bb-map-overlay').remove(); extension_settings['BB-Enhance-Gen'].generationSource = 'main'; });
+        await page.evaluate(() => { document.getElementById('bb-map-overlay')?.remove(); extension_settings['BB-Enhance-Gen'].generationSource = 'main'; });
         await page.locator('#bb-eg-btn-improve').evaluate(button => button.click());
         await page.waitForFunction(() => requests === 10);
         await page.evaluate(() => finish('Отредактированный черновик.'));
