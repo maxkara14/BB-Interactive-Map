@@ -47,6 +47,8 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         assert.equal(await page.locator('option[value="enhance"]').evaluate(option => option.disabled), false);
         await page.evaluate(() => { settings.travelWriting = 'enhance'; showRadarModal(rawMap, true); });
         await page.locator('.zone-north').click();
+        assert.equal(await page.locator('.bb-map-travel-options').getAttribute('open'), null);
+        await page.locator('.bb-map-travel-options > summary').click();
         await page.locator('#bb-map-travel input').fill('Осторожно');
         await page.locator('#send_textarea').fill('Старый текст  ');
         const write = () => page.getByRole('button', { name: 'НАПИСАТЬ ДЕЙСТВИЕ · ENHANCE', exact: true }).click();

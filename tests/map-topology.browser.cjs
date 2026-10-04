@@ -21,7 +21,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             ${strip(read('index.js').split('jQuery(async () => {')[0])}
             injectCurrentMapContext = () => {}; renderMapWidget = () => {}; setupExtensionSettings = () => {};
             var sourceGraph = { layout: 'graph', scope: 'surroundings', schematic_name: 'Поместье Бабочки', player_place_id: 'hall', zones: [
-                { id: 'hall', name: 'Тренировочный зал', kind: 'room', poi: ['Боккэн'], characters: [{ name: 'Ибуки' }] },
+                { id: 'hall', name: 'Тренировочный зал', kind: 'room', poi: [{ name: 'Боккэн', description: 'Тренировочный деревянный меч.' }], characters: [{ name: 'Ибуки', description: 'Мокрый китель.', mood: 'Дерзкая невозмутимость', attitude: 'Игнорирует ворчание Аой.', thought: 'Опять завела свою шарманку.' }] },
                 { id: 'corridor', name: 'Галерея', kind: 'passage' }, { id: 'garden', name: 'Сад Бабочки', kind: 'outdoor' },
                 { id: 'clinic', name: 'Лазарет', kind: 'room' }, { id: 'grove', name: 'Бамбуковая роща', kind: 'outdoor' },
                 { id: 'shed', name: 'Запертый сарай', kind: 'room' }
@@ -37,17 +37,27 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             showRadarModal(original, true);
         ` });
         await page.locator('.bb-topology-place').first().waitFor();
-        assert.match(await page.locator('.bb-topology-contents').innerText(), /Персонажи: Ибуки/);
-        assert.match(await page.locator('.bb-topology-contents').innerText(), /Предметы: Боккэн/);
-        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Ибуки/);
+        await page.locator('.bb-dossier-entry > summary').first().click();
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Мокрый китель/);
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Игнорирует ворчание Аой/);
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Опять завела свою шарманку/);
+        await page.locator('.bb-dossier-entry > summary').first().click();
+        await page.getByRole('tab', { name: /Предметы/ }).click();
+        assert.match(await page.locator('.bb-topology-contents').innerText(), /Боккэн/);
+        await page.getByRole('tab', { name: /Предметы/ }).focus();
+        await page.keyboard.press('ArrowRight');
+        assert.equal(await page.getByRole('tab', { name: /Проходы/ }).getAttribute('aria-selected'), 'true');
+        await page.getByRole('tab', { name: /Предметы/ }).click();
+        assert.equal(await page.locator('.bb-dossier-entry[open]').count(), 0);
         await page.getByRole('button', { name: /Бамбуковая роща/ }).click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Подтверждённого маршрута нет/);
-        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
-        await page.locator('.bb-topology-more > summary').click();
+        assert.equal(await page.locator('.bb-dossier-entry').first().getAttribute('open'), null);
+        await page.locator('.bb-dossier-entry > summary').first().click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Очень длинное название/);
         assert.equal(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Очень длинное' }).count(), 0);
         await page.getByRole('button', { name: /Лазарет/ }).click();
-        assert.match(await page.locator('.bb-topology-detail').innerText(), /Тренировочный зал → Галерея → Лазарет/);
+        assert.match(await page.locator('#bb-map-travel').innerText(), /Тренировочный зал → Галерея → Лазарет/);
         assert.ok(await page.locator('.bb-topology-edge.is-route').count() >= 2);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data === saved), true);
         for (const width of [1440, 768, 390, 320]) {
@@ -57,7 +67,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Сёдзи' }).count() > 0, 'Short doorway label is visible');
             assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Ступени' }).count() > 0, 'Short stairs label is visible');
             assert.ok(await page.locator('.bb-topology-edge-label').filter({ hasText: 'Тропинка' }).count() > 0, 'Long name retains a short type label at ' + width);
-            assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), null);
+            assert.equal(await page.locator('.bb-dossier-entry[open]').count(), 0);
             assert.ok(await page.locator('.bb-topology-detail').evaluate(el => el.getBoundingClientRect().height < 230), 'Selection remains compact');
             await page.locator('.bb-topology-field').evaluate(field => {
                 const boxes = [...field.querySelectorAll('button')].map(el => el.getBoundingClientRect());
@@ -88,11 +98,11 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.match(await page.locator('.bb-map-header-container').innerText(), /Surroundings/);
         await page.getByRole('button', { name: /Бамбуковая роща/ }).click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /No confirmed route/);
-        await page.locator('.bb-topology-more > summary').click();
-        await page.locator('.bb-topology-more > summary').focus();
+        await page.locator('.bb-dossier-entry > summary').first().click();
+        await page.locator('.bb-dossier-entry > summary').first().focus();
         await page.evaluate(() => mapTopologyView.refresh());
-        assert.equal(await page.locator('.bb-topology-more').getAttribute('open'), '');
-        assert.equal(await page.locator('.bb-topology-more > summary').evaluate(el => el === document.activeElement), true);
+        assert.equal(await page.locator('.bb-dossier-entry').first().getAttribute('open'), '');
+        assert.equal(await page.locator('.bb-dossier-entry > summary').first().evaluate(el => el === document.activeElement), true);
         await page.keyboard.press('Escape'); assert.equal(await page.locator('#bb-map-overlay').count(), 0);
         await page.evaluate(() => {
             settings.uiLanguage = 'ru'; chat_metadata.bb_map_mode = 'game';

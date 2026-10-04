@@ -57,7 +57,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.equal(await page.locator('.bb-map-widget-place[data-place-id]').count(), 2);
         assert.match(await page.locator('.bb-map-widget-content').innerText(), /Поместье Бабочки — северное крыло/);
         await page.getByRole('button', { name: 'Сад', exact: false }).filter({ has: page.locator('small', { hasText: 'Открытое место' }) }).click();
-        assert.match(await page.locator('#bb-map-travel').innerText(), /Зал → Сад/);
+        assert.match(await page.locator('#bb-map-travel').innerText(), /Зал → Галерея → Сад/);
         assert.match(await page.locator('#bb-map-travel').innerText(), /Галерея · Опасность · Дым/);
         await page.locator('#send_textarea').fill('Мой текст');
         const currentPlace = await page.evaluate(() => chat_metadata.bb_map_data.raw.player_place_id);
@@ -189,6 +189,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         });
         assert.equal(await page.locator('.bb-map-widget-place').count(), 0);
         assert.match(await page.locator('.bb-map-widget').innerText(), /Position unknown/);
+        assert.equal(await page.locator('.bb-map-widget-threat').innerText(), 'Position unknown');
         await page.evaluate(() => { settings.uiLanguage = 'ru'; chat_metadata.bb_map_data = miniHub; renderMapWidget(); });
         await page.locator('.bb-map-widget-place[data-place-id]').first().click();
         assert.match(await page.locator('.bb-topology-detail').innerText(), /Забрызганный гравий/);
@@ -198,6 +199,8 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             const raw = structuredClone(miniHub.raw); raw.zones[1].threat_level = 'tension'; raw.zones[2].threat_level = 'danger';
             chat_metadata.bb_map_data = createSavedMap(raw); renderMapWidget();
         });
+        assert.equal(await page.locator('.bb-map-widget-threat').innerText(), 'Безопасно');
+        assert.equal(await page.locator('.bb-map-widget.bb-map-widget-safe').count(), 1);
         assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 2);
         await page.evaluate(() => renderMapWidget());
         assert.equal(await page.locator('.bb-map-widget-place.is-changed').count(), 0);
@@ -290,7 +293,8 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.locator('.bb-map-widget-place').filter({ hasText: 'Кухонный переход' }).click();
         assert.equal(await page.locator('.bb-topology-arrow.is-route').count(), 2);
         assert.equal(await page.locator('.bb-topology-edge.is-line.is-route.is-reverse').count(), 1);
-        assert.match(await page.locator('.bb-topology-detail').innerText(), /Каменный умывальник → Забрызганный гравий → Кухонный переход/);
+        assert.match(await page.locator('#bb-map-travel').innerText(), /Каменный умывальник → Забрызганный гравий → Кухонный переход/);
+        assert.doesNotMatch(await page.locator('.bb-topology-detail').innerText(), /Каменный умывальник → Забрызганный гравий/);
         await page.locator('.bb-topology-field').evaluate(field => {
             const arrows = [...field.querySelectorAll('.bb-topology-arrow.is-route')];
             for (const arrow of arrows) {
@@ -301,7 +305,9 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
                 if (Math.hypot(coords[2] - point.x, coords[3] - point.y) > .1) throw Error('Arrow points against the route');
             }
         });
+        assert.ok(await page.locator('#bb-map-travel').evaluate(node => node.getBoundingClientRect().height < 180), 'Travel stays compact at 320px');
         if (process.argv[3]) {
+            await page.locator('#bb-map-travel').screenshot({ path: path.join(process.argv[3], 'travel-320.png') });
             await page.waitForTimeout(600);
             await page.locator('.bb-map-graph-modal').screenshot({ path: path.join(process.argv[3], 'kitchen-full.png') });
         }

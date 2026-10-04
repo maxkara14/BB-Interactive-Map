@@ -584,14 +584,14 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
 function renderTravelPanel(panel, transition, chatForMap, expectedMap, routeContext = '') {
     if (mapTravelController) return;
     panel.className = 'bb-map-travel'; panel.replaceChildren();
-    const note = document.createElement('p');
+    const note = document.createElement('p'); note.className = 'bb-map-travel-warning';
     const { from, to } = transition;
     const routeThreats = (transition.routePlaces || [to]).filter(place => place.threat_level === 'danger' || place.threat_level === 'tension');
     const level = routeThreats.some(place => place.threat_level === 'danger') ? 'danger' : routeThreats.length ? 'tension' : 'safe';
     panel.classList.add(`is-${level}`);
-    const route = document.createElement('strong');
-    route.textContent = `${from.name} → ${to.name}`;
-    note.textContent = routeThreats.length ? routeThreats.map(place => `${place.name} · ${mapThreatLabel(place.threat_level)} · ${place.threat_reason || ''}`).join('; ')
+    const route = document.createElement('strong'); route.className = 'bb-map-travel-route';
+    route.textContent = (transition.routeNames || [from.name, to.name]).join(' → ');
+    note.textContent = routeThreats.length ? routeThreats.map(place => [place.name, mapThreatLabel(place.threat_level), place.threat_reason].filter(Boolean).join(' · ')).join('; ')
         : `${mapThreatLabel(to.threat_level || 'safe')} · ${to.threat_reason || tr('Обстановка не описана.', 'Conditions are not described.')}`;
     const source = document.createElement('small');
     source.textContent = tr('По сохранённой карте. Переход добавится в черновик; расположение обновится после событий сцены и сохранения карты.',
@@ -616,6 +616,8 @@ function renderTravelPanel(panel, transition, chatForMap, expectedMap, routeCont
             status.textContent = tr('Нужен запущенный Enhance Gen с поддержкой действий карты. Обновите оба расширения или выберите простой текст.', 'Requires a running Enhance Gen with map action support. Update both extensions or choose simple text.');
         }
     }
+    prepare.setAttribute('aria-label', prepare.textContent);
+    prepare.textContent = literary ? tr('Написать · Enhance', 'Write · Enhance') : tr('Подготовить переход', 'Prepare travel');
     prepare.onclick = async () => {
         if (!isSameChat(chatForMap, SillyTavern.getContext()) || getMapDataForCurrentChat() !== expectedMap
             || getMapMode(chat_metadata) !== 'game') {
@@ -667,9 +669,11 @@ function renderTravelPanel(panel, transition, chatForMap, expectedMap, routeCont
         composer.focus();
         composer.setSelectionRange(draft.length, draft.length);
     };
-    panel.append(route, note, source);
-    if (literary) panel.append(instructionLabel);
-    panel.append(prepare, status);
+    const header = document.createElement('div'); header.className = 'bb-map-travel-header';
+    header.append(route, prepare); panel.append(header, note);
+    const options = document.createElement('details'); options.className = 'bb-map-travel-options';
+    const summary = document.createElement('summary'); summary.textContent = literary ? tr('Уточнить действие', 'Refine action') : tr('О переходе', 'About travel');
+    options.append(summary); if (literary) options.append(instructionLabel); options.append(source); panel.append(options, status);
 }
 
 function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
@@ -689,7 +693,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap) {
         ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
         <div class="bb-map-controls">${!isSavedMap ? `<button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn">${tr('ЗАПОМНИТЬ ЛОКАЦИЮ', 'SAVE LOCATION')}</button>` : ''}
         <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button><button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
-    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, previous: !isSavedMap ? expectedMap?.raw : null, onSelect: place => {
+    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, showRoute: !isSavedMap || mode !== 'game', previous: !isSavedMap ? expectedMap?.raw : null, onSelect: place => {
         if (!isSavedMap || mode !== 'game') return;
         const route = getMapRoute(data, place.id), panel = overlay.querySelector('#bb-map-travel');
         if (!route || route.places.length < 2) { panel.className = ''; panel.replaceChildren(); return; }
@@ -1596,10 +1600,9 @@ function renderMapWidget() {
     try { raw = readMapState(mapData); } catch { return; }
     const zones = new Map(raw.zones.filter(zone => zone && WIDGET_POSITIONS.includes(zone.position)).map(zone => [zone.position, zone]));
     const center = raw.layout === 'graph' ? raw.zones.find(zone => zone.id === raw.player_place_id) : zones.get('center');
-    const danger = raw.zones.some(zone => zone?.threat_level === 'danger');
-    const tension = !danger && raw.zones.some(zone => zone?.threat_level === 'tension');
-    const level = danger ? 'danger' : tension ? 'tension' : 'safe';
-    const threatText = danger ? tr('Опасность', 'Danger') : tension ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
+    const level = center?.threat_level || 'unknown';
+    const threatText = level === 'danger' ? tr('Опасность', 'Danger') : level === 'tension' ? tr('Напряжение', 'Tension')
+        : level === 'safe' ? tr('Безопасно', 'Safe') : tr('Положение неизвестно', 'Position unknown');
     const widget = document.createElement('section');
     widget.id = 'bb-map-widget';
     widget.className = `bb-map-widget bb-map-widget-${level}${settings.mapAnimations ? '' : ' bb-map-motion-off'}`;

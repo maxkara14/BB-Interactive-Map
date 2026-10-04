@@ -552,3 +552,43 @@
 .bb-map-widget-place.is-current > span { flex: none; line-height: 12px; max-height: 24px; -webkit-line-clamp: 2; }
 .bb-topology-arrow { stroke-dasharray: none; stroke-linejoin: round; }
 @keyframes bb-map-perimeter { to { stroke-dashoffset: -22; } }
+/* Selected-place dossier follows the approved compact tabbed panel. */
+.bb-topology-detail { padding:14px 16px; }
+.bb-dossier-kicker { display:block; color:#79d7d3; font-size:11px; margin-bottom:3px; }
+.bb-topology-detail-heading { align-items:center; }
+.bb-topology-condition { padding:3px 6px; border-radius:4px; background:#72ab910c; color:#9cc9ae; }
+.bb-topology-detail .bb-topology-summary { display:block; overflow:visible; -webkit-line-clamp:unset; margin:8px 0; }
+.bb-topology-more { margin:7px 0 10px; }
+.bb-topology-more > summary { color:#a0b3b5; }
+.bb-topology-more > summary strong { font-weight:400; }
+.bb-dossier-tabs { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; border-bottom:1px solid #35494b; margin-top:12px; }
+.bb-dossier-tabs button { min-width:0; padding:8px 2px; border:0; border-bottom:2px solid transparent; background:transparent; color:#a3b8b9; font:inherit; font-size:12px; cursor:pointer; }
+.bb-dossier-tabs button[aria-selected=true] { color:#79d7d3; border-bottom-color:#79d7d3; background:#79d7d308; }
+.bb-dossier-tabs button > span { display:inline-block; padding:1px 4px; background:#79d7d315; border-radius:3px; color:#79d7d3; font-size:10px; }
+.bb-topology-contents { display:block; margin-top:0; }
+.bb-topology-contents [hidden] { display:none; }
+.bb-dossier-entry { padding:10px 0; border-bottom:1px solid #35494b; }
+.bb-dossier-entry:last-child { border-bottom:0; }
+.bb-dossier-entry > summary { display:flex; align-items:center; flex-wrap:wrap; gap:4px 10px; list-style:none; cursor:pointer; }
+.bb-dossier-entry > summary::-webkit-details-marker { display:none; }
+.bb-dossier-entry > summary::after { content:'+'; color:#a3b8b9; margin-left:auto; }
+.bb-dossier-entry[open] > summary::after { content:'−'; }
+.bb-dossier-entry > summary strong { font-size:12px; }
+.bb-dossier-tag { color:#a3b8b9; font-size:11px; }
+.bb-topology-detail .bb-dossier-entry p { margin:7px 0 0; line-height:1.45; }
+.bb-topology-detail .bb-dossier-empty { padding:10px 0; }
+.bb-map-travel { gap:7px; padding:10px 12px; }
+.bb-map-travel-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.bb-map-travel-route { min-width:0; font-size:12px; overflow-wrap:anywhere; }
+.bb-map-travel .bb-map-btn { width:auto; flex:none; padding:7px 10px; font-size:12px; letter-spacing:0; text-transform:none; margin:0; }
+.bb-map-travel-warning { margin:0; font-size:12px !important; }
+.bb-map-travel-options { font-size:11px; color:#aebdcd; }
+.bb-map-travel-options summary { cursor:pointer; width:fit-content; }
+.bb-map-travel-options label { margin-top:8px; font-size:12px; }
+.bb-map-travel-options small { display:block; margin-top:7px; font-size:11px; }
+.bb-map-travel [role=status]:empty { display:none; }
+.bb-map-widget-unknown .bb-map-widget-signal { background:#94a3b8; box-shadow:none; }
+.bb-map-widget-unknown .bb-map-widget-threat { color:#94a3b8; }
+@media(max-width:600px) { .bb-map-travel-header { align-items:stretch; flex-direction:column; gap:7px; } .bb-map-travel .bb-map-btn { align-self:flex-start; } }
+@media(pointer:coarse) { .bb-dossier-tabs button, .bb-dossier-entry > summary, .bb-map-travel-options summary { min-height:44px; } }
+@media(max-width:390px) { .bb-dossier-tabs button { padding:8px 0; font-size:11px; white-space:nowrap; } .bb-dossier-tabs button > span { padding:1px 3px; } }

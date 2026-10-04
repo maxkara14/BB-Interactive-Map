@@ -118,7 +118,7 @@ export function layoutMapPassage(p, q, nodes, width) {
         { x: channel, y: q.y }, { x: q.x + Math.sign(channel - q.x) * q.width / 2, y: q.y }];
 }
 
-export function createMapTopologyView(raw, { language = 'ru', animations = true, previous = null, onSelect = () => {} } = {}) {
+export function createMapTopologyView(raw, { language = 'ru', animations = true, previous = null, showRoute = true, onSelect = () => {} } = {}) {
     const tr = (ru, en) => language === 'ru' ? ru : en;
     const element = document.createElement('section'); element.className = 'bb-topology' + (animations ? '' : ' bb-map-motion-off');
     const field = document.createElement('div'); field.className = 'bb-topology-field';
@@ -137,7 +137,7 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
     element.append(field, legend, detail);
     let selected = raw.player_place_id || raw.zones[0].id;
     const changes = getMapVisualChanges(raw, previous);
-    let initialDraw = true;
+    let initialDraw = true, detailTab = 'characters';
     const kinds = { room: ['Помещение', 'Room'], outdoor: ['Открытое место', 'Outdoors'], passage: ['Проход', 'Passage'],
         area: ['Участок', 'Area'], unknown: ['Тип неизвестен', 'Unknown type'] };
     const passageKinds = { door: ['Дверь', 'Door'], path: ['Тропинка', 'Path'], stairs: ['Ступени', 'Stairs'], opening: ['Проём', 'Opening'], passage: ['Проход', 'Passage'], unknown: ['Связь', 'Link'] };
@@ -157,7 +157,7 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
     function draw() {
         if (!field.isConnected || !field.clientWidth) return;
         const focusedId = places.querySelector(':focus')?.dataset.placeId;
-        const focusedMore = detail.querySelector('summary') === document.activeElement;
+        const focusedDetail = detail.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
         const width = field.clientWidth, layout = layoutMapPlaces(raw, width);
         field.style.height = `${layout.height}px`; svg.setAttribute('viewBox', `0 0 ${width} ${layout.height}`);
         svg.replaceChildren(); places.replaceChildren();
@@ -245,40 +245,75 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
             }
             if (!placed) label.remove();
         }
-        const node = byId.get(selected), expanded = detail.querySelector('details')?.open && detail.dataset.placeId === selected;
+        const node = byId.get(selected), samePlace = detail.dataset.placeId === selected;
+        const opened = new Set(samePlace ? [...detail.querySelectorAll('details[open]')].map(item => item.dataset.entryKey) : []);
+        const adjacent = raw.connections.filter(edge => edge.from === selected || edge.to === selected);
+        if (!samePlace) detailTab = node.characters.length ? 'characters' : node.poi.length ? 'objects' : adjacent.length ? 'passages' : 'characters';
         detail.replaceChildren(); detail.dataset.placeId = selected;
         const heading = document.createElement('div'); heading.className = 'bb-topology-detail-heading';
-        const title = document.createElement('h3'); title.textContent = node.name;
+        const titleGroup = document.createElement('div'), kicker = document.createElement('small'); kicker.className = 'bb-dossier-kicker';
+        kicker.textContent = tr(...kinds[node.kind]) + (selected === raw.player_place_id ? ' · ' + tr('Вы здесь', 'You are here') : '');
+        const title = document.createElement('h3'); title.textContent = node.name; titleGroup.append(kicker, title);
         const condition = document.createElement('span'); condition.className = 'bb-topology-condition is-' + node.threat_level;
         condition.textContent = node.threat_level === 'danger' ? tr('Опасность', 'Danger') : node.threat_level === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe');
-        condition.title = node.threat_reason; heading.append(title, condition); detail.append(heading);
+        condition.title = node.threat_reason; heading.append(titleGroup, condition); detail.append(heading);
         paragraph('', node.summary, detail, 'bb-topology-summary');
         if (node.uncertain) paragraph('', tr('Сведения о месте не подтверждены.', 'The place information is unconfirmed.'));
-        paragraph(tr('Маршрут', 'Route'), selected === raw.player_place_id ? tr('Текущее место', 'Current place')
-            : route ? route.places.map(id => byId.get(id).name).join(' → ')
-                : !raw.player_place_id ? tr('Положение игрока неизвестно.', 'The player position is unknown.') : tr('Подтверждённого маршрута нет.', 'No confirmed route.'), detail, 'bb-topology-route');
-        const adjacent = raw.connections.filter(edge => edge.from === selected || edge.to === selected);
-        if (adjacent.length) paragraph(tr('Проходы', 'Passages'), adjacent.map(edge => (edge.name.length <= 32 ? edge.name : tr(...passageKinds[edge.kind]))
-            + (edge.status === 'confirmed' ? '' : ' · ' + tr(...states[edge.status]))).join(' · '), detail, 'bb-topology-route');
+        const disclosure = (key, name, badge, target, className = 'bb-dossier-entry') => {
+            const row = document.createElement('details'); row.className = className; row.dataset.entryKey = key; row.open = opened.has(key);
+            const summary = document.createElement('summary'); summary.dataset.focusKey = key;
+            const text = document.createElement('strong'); text.textContent = name; summary.append(text);
+            if (badge) { const tag = document.createElement('span'); tag.className = 'bb-dossier-tag'; tag.textContent = badge; summary.append(tag); }
+            row.append(summary); target.append(row); return row;
+        };
+        if (node.threat_reason) paragraph('', node.threat_reason, disclosure('conditions', tr('Обстановка', 'Conditions'), '', detail, 'bb-topology-more'));
+        if (selected !== raw.player_place_id && (showRoute || !route)) paragraph(tr('Маршрут', 'Route'), route ? route.places.map(id => byId.get(id).name).join(' → ')
+            : !raw.player_place_id ? tr('Положение игрока неизвестно.', 'The player position is unknown.') : tr('Подтверждённого маршрута нет.', 'No confirmed route.'), detail, 'bb-topology-route');
+        const tabs = document.createElement('div'); tabs.className = 'bb-dossier-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', tr('Сведения о зоне', 'Place details'));
         const contents = document.createElement('div'); contents.className = 'bb-topology-contents';
-        paragraph(tr('Персонажи', 'Characters'), node.characters.map(char => char.name).join(', '), contents);
-        paragraph(tr('Предметы', 'Objects'), node.poi.map(poiName).join(', '), contents); detail.append(contents);
-        const extra = document.createElement('details'); extra.className = 'bb-topology-more'; extra.open = !!expanded;
-        const more = document.createElement('summary'); more.textContent = tr('Подробнее', 'Details'); extra.append(more);
-        paragraph('', node.summary, extra);
-        paragraph(tr('Обстановка', 'Conditions'), node.threat_reason, extra);
-        for (const char of node.characters) {
-            paragraph(char.name, [char.description, char.mood, char.attitude, char.thought].filter(Boolean).join(' · '), extra);
+        const categories = [['characters', tr('Персонажи', 'Characters'), node.characters], ['objects', tr('Предметы', 'Objects'), node.poi], ['passages', tr('Проходы', 'Passages'), adjacent]];
+        for (const [key, label, entries] of categories) {
+            const button = document.createElement('button'); button.type = 'button'; button.id = 'bb-dossier-tab-' + key;
+            button.setAttribute('role', 'tab'); button.dataset.focusKey = 'tab-' + key; button.dataset.category = key;
+            button.setAttribute('aria-selected', String(detailTab === key)); button.setAttribute('aria-controls', 'bb-dossier-panel-' + key);
+            button.tabIndex = detailTab === key ? 0 : -1; button.append(document.createTextNode(label + ' '));
+            const count = document.createElement('span'); count.textContent = entries.length; button.append(count); tabs.append(button);
+            const panel = document.createElement('div'); panel.id = 'bb-dossier-panel-' + key; panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', button.id); panel.hidden = detailTab !== key;
+            if (!entries.length) paragraph('', tr('Пока нет сведений.', 'No information yet.'), panel, 'bb-dossier-empty');
+            entries.forEach((entry, i) => {
+                const name = key === 'objects' ? poiName(entry) : key === 'passages' ? byId.get(entry.from === selected ? entry.to : entry.from).name : entry.name;
+                const other = key === 'passages' ? byId.get(entry.from === selected ? entry.to : entry.from) : null;
+                const badge = key === 'characters' ? entry.mood : other ? entry.status !== 'confirmed' ? tr(...states[entry.status])
+                    : other.threat_level === 'danger' ? tr('Опасность', 'Danger') : other.threat_level === 'tension' ? tr('Напряжение', 'Tension') : tr('Безопасно', 'Safe') : '';
+                const row = disclosure(key + '-' + (entry.id || i), name, badge, panel);
+                if (key === 'passages') {
+                    paragraph('', entry.name, row);
+                    paragraph(tr('Тип', 'Type'), tr(...passageKinds[entry.kind]), row);
+                    paragraph(tr('Статус', 'Status'), tr(...states[entry.status]), row);
+                    paragraph(tr('Направление', 'Direction'), entry.direction === 'forward' ? byId.get(entry.from).name + ' → ' + byId.get(entry.to).name : tr('В обе стороны', 'Both ways'), row);
+                    paragraph(tr('Наблюдение', 'Observation'), entry.evidence, row);
+                } else {
+                    paragraph('', entry.description, row);
+                    if (key === 'characters') { paragraph(tr('Отношение', 'Attitude'), entry.attitude, row); paragraph(tr('Мысли', 'Thoughts'), entry.thought, row); }
+                }
+            });
+            contents.append(panel);
+            button.onclick = () => {
+                detailTab = key;
+                for (const tab of tabs.children) { const active = tab === button; tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1; }
+                for (const section of contents.children) section.hidden = section !== panel;
+            };
+            button.onkeydown = event => {
+                const index = ['ArrowRight','ArrowLeft','Home','End'].includes(event.key) ? [...tabs.children].indexOf(button) : -1;
+                if (index < 0) return;
+                event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
+                tabs.children[next].click(); tabs.children[next].focus();
+            };
         }
-        for (const item of node.poi) paragraph(poiName(item), item.description, extra);
-        for (const edge of adjacent) {
-            const other = byId.get(edge.from === selected ? edge.to : edge.from);
-            paragraph(tr('Проход', 'Passage'), `${edge.name} · ${other.name} · ${tr(...states[edge.status])}${edge.direction === 'forward' ? ` · ${byId.get(edge.from).name} → ${byId.get(edge.to).name}` : ''}${edge.evidence ? ' · ' + edge.evidence : ''}`, extra);
-        }
-        if (extra.querySelector('p')) detail.append(extra);
+        detail.append(tabs, contents);
         initialDraw = false;
         if (focusedId) places.querySelector(`[data-place-id="${focusedId}"]`)?.focus({ preventScroll: true });
-        else if (focusedMore) detail.querySelector('summary')?.focus({ preventScroll: true });
+        else if (focusedDetail) [...detail.querySelectorAll('[data-focus-key]')].find(node => node.dataset.focusKey === focusedDetail)?.focus({ preventScroll: true });
     }
     const observer = new ResizeObserver(draw); observer.observe(field);
     return { element, refresh: draw, setAnimations: enabled => {
