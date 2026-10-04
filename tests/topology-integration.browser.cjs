@@ -207,10 +207,11 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         assert.equal(await page.locator('.bb-map-widget-place.is-current').evaluate(node => getComputedStyle(node, '::before').animationName), 'bb-map-breathe');
         assert.equal(await page.locator('.bb-map-widget-shape.is-tension').evaluate(node => getComputedStyle(node).stroke), 'rgb(216, 180, 106)');
         assert.equal(await page.locator('.bb-map-widget-shape.is-danger').evaluate(node => getComputedStyle(node).stroke), 'rgb(215, 125, 125)');
-        for (const [level, duration] of [['safe','14s'], ['tension','6s'], ['danger','2s']]) {
+        for (const [level, duration] of [['safe','0s'], ['tension','6s'], ['danger','2s']]) {
             const shape = page.locator('.bb-map-widget-shape.is-' + level).first();
             assert.equal(await shape.evaluate(node => getComputedStyle(node).animationDuration), duration);
-            assert.equal(await animation(shape), 'bb-map-perimeter');
+            assert.equal(await animation(shape), level === 'safe' ? 'none' : level === 'tension' ? 'bb-map-perimeter' : 'bb-map-alert');
+            assert.equal(await shape.evaluate(node => getComputedStyle(node).strokeDasharray), level === 'tension' ? '6px, 5px' : 'none');
         }
         const perimeter = page.locator('.bb-map-widget-shape.is-tension');
         const perimeterOffset = await perimeter.evaluate(node => getComputedStyle(node).strokeDashoffset);
