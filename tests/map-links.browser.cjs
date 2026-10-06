@@ -7,9 +7,11 @@ const { chromium } = require(process.argv[2] || 'playwright');
 const root = path.join(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 const state = read('map-state.js').replace(/^export /gm, '');
-const links = read('map-links.js').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
+const links = read('map-object-mentions.js').replace(/^export /gm, '') + '\n'
+    + read('map-links.js').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const topology = read('map-topology-view.js').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
 const source = read('index.js').replace(/^import .*;\r?\n/gm, '');
+const keyboard = fs.readFileSync(path.resolve(root, '../../../../scripts/keyboard.js'), 'utf8').replace(/^export /gm, '');
 const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js'), 'utf8')
     .match(/export const event_types = (\{[\s\S]*?\r?\n\});/)[1];
 
@@ -202,6 +204,149 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.locator('.bb-map-mention-open').click();
         assert.equal(await page.locator('.bb-topology-place[aria-pressed="true"]').getAttribute('title'), 'Сад');
         await page.keyboard.press('Escape');
+
+        // A collapsed CSS scene-state widget contains the same names as the narrative.
+        await page.evaluate(() => {
+            chat_metadata.bb_map_data = createSavedMap(normalizeGraphMapData({ layout: 'graph', scope: 'scene',
+                schematic_name: 'Класс', player_place_id: 'class', zones: [{ id: 'class', name: 'Класс', kind: 'room',
+                    characters: ['Рин', 'Кёдзиро Ренгоку', 'Аой Канзаки', 'Юи Хошикава', 'Канао Цуюри', 'Нэзуко Камадо',
+                        'Две спорящие ученицы', 'Неустановленный ученик с заднего ряда'].map(name => ({ name })),
+                    poi: ['Доска', 'Учительский стол', 'Парты и проход между рядами', 'Школьное окно'] }], connections: [] }));
+            document.getElementById('new-reply').innerHTML = `<style>
+                .test-scene-body { display:grid; grid-template-rows:0fr; opacity:0; }
+                .test-scene-body > div { overflow:hidden; }
+                .test-scene:has(input:checked) .test-scene-body { grid-template-rows:1fr; opacity:1; }
+                </style><div class="test-scene"><label><input id="scene-toggle" type="checkbox">Состояние сцены</label>
+                <div class="test-scene-body"><div>Рин. Кёдзиро Ренгоку. Аой Канзаки. Юи Хошикава. Канао Цуюри. Нэзуко Камадо. Доска. Учительский стол.</div></div></div>
+                <div style="display:none">Рин. Учительский стол.</div><div style="visibility:hidden">Аой Канзаки.</div>
+                <details><summary>Закрытая сводка</summary>Юи Хошикава.</details>
+                <p id="scene-narrative">Две девочки с заднего ряда. Рин. Кёдзиро Ренгоку. Аой Канзаки. Юи Хошикава. Канао Цуюри. Нэзуко Камадо. Доска. Учительский стол. Ренгоку.</p>`;
+            renderMapWidget();
+        });
+        await page.waitForFunction(() => document.querySelectorAll('#scene-narrative [data-bb-map-mention]').length === 8);
+        assert.equal(await page.locator('.test-scene-body [data-bb-map-mention]').count(), 0);
+        assert.equal(await page.locator('#new-reply [data-bb-map-mention="две"], #new-reply [data-bb-map-mention="ряда"]').count(), 0);
+        await page.locator('#scene-toggle').check();
+        await page.waitForFunction(() => document.querySelectorAll('.test-scene-body [data-bb-map-mention]').length === 8);
+        assert.equal(await page.locator('#scene-narrative [data-bb-map-mention]').count(), 0);
+        await page.locator('#scene-toggle').uncheck();
+        await page.waitForFunction(() => document.querySelectorAll('#scene-narrative [data-bb-map-mention]').length === 8);
+
+        // A real touch context, with an unrelated retained selection and a child click handler.
+        const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+        const touchPage = await phone.newPage();
+        touchPage.on('pageerror', error => errors.push(error.message));
+        await touchPage.setContent('<meta name="viewport" content="width=device-width, initial-scale=1"><body><div id="sheld"><div id="chat" style="height:400px"><div class="mes_text"><p id="selected">Ранее выделенный текст</p><p id="touch-message">Аой Канзаки взяла Медный ключ.</p></div></div></div></body>');
+        await touchPage.addStyleTag({ content: fs.readFileSync(path.resolve(root, '../../../../style.css'), 'utf8').replace(/^@import .*;$/gm, '') });
+        await touchPage.addStyleTag({ content: fs.readFileSync(path.resolve(root, '../../../../css/mobile-styles.css'), 'utf8') });
+        // Real Tavern has a zero-height transformed root above its fixed mobile body.
+        await touchPage.addStyleTag({ content: 'html { height:0; transform:translateZ(0); } body { position:fixed; }' });
+        await touchPage.addStyleTag({ content: read('style.css') });
+        await touchPage.addScriptTag({ content: `${state}\n${links}\n
+            let raw = { zones: [{ name:'Класс 1-Б академии Кимэцу', characters:[{name:'Аой Канзаки',
+                description:'Ученица в форме с испачканными чернилами пальцами; прячет руку под партой и держит сломанную ручку.',
+                mood:'Растерянная и смущенная', attitude:'Пытается преуменьшить значение письма и остановить обострение.'}], poi:['Медный ключ'] }] };
+            const controller = createChatMapLinks({ getMap:()=>raw, isEnabled:()=>true,
+                getLabels:()=>({language:'en', types:{character:'Character', object:'Object', zone:'Zone'}, close:'Close',
+                    noDescription:'No description', position:()=>'', mood:'Состояние', attitude:'Отношение', source:'По сохранённой карте', openMap:'Открыть карту ↗'}), onOpenMap:()=>{} });
+            controller.refresh();
+            document.getElementById('touch-message').addEventListener('click', event=>event.stopPropagation());
+        ` });
+        await touchPage.locator('[data-bb-map-mention]').first().waitFor();
+        await touchPage.evaluate(() => {
+            const range = document.createRange(); range.selectNodeContents(document.getElementById('selected'));
+            getSelection().removeAllRanges(); getSelection().addRange(range);
+            document.querySelector('[data-bb-map-mention]').click();
+        });
+        assert.match(await touchPage.locator('#bb-map-mention-card').innerText(), /Аой Канзаки/);
+        await touchPage.locator('.bb-map-mention-close').tap();
+        await touchPage.evaluate(() => getSelection().removeAllRanges());
+        await touchPage.locator('[data-bb-map-mention]').first().tap();
+        await touchPage.waitForTimeout(300);
+        assert.match(await touchPage.locator('#bb-map-mention-card').innerText(), /Аой Канзаки/);
+        const initialCardBounds = await touchPage.locator('#bb-map-mention-card').boundingBox();
+        const initialMentionBounds = await touchPage.locator('[data-bb-map-mention]').first().boundingBox();
+        assert.ok(initialCardBounds.width <= 260, 'Mobile cards must remain narrow');
+        assert.ok(Math.abs(initialCardBounds.y - initialMentionBounds.y - initialMentionBounds.height - 8) < 1,
+            'With room below, the mobile card must open directly under the mention');
+        assert.ok(initialCardBounds.y >= 0 && initialCardBounds.y + initialCardBounds.height <= 844,
+            `Touch-opened card must be visible with Tavern's zero-height root: ${JSON.stringify(initialCardBounds)}`);
+        if (screenshots) await touchPage.screenshot({ path: path.join(screenshots, 'map-mention-compact-phone.png') });
+        await touchPage.locator('.bb-map-mention-close').tap();
+
+        await touchPage.evaluate(() => {
+            document.getElementById('touch-message').style.cssText = 'position:fixed;top:730px;left:200px;width:180px';
+        });
+        await touchPage.locator('[data-bb-map-mention]').first().tap();
+        const edgeCardBounds = await touchPage.locator('#bb-map-mention-card').boundingBox();
+        const edgeMentionBounds = await touchPage.locator('[data-bb-map-mention]').first().boundingBox();
+        assert.ok(edgeCardBounds.y + edgeCardBounds.height <= edgeMentionBounds.y - 7,
+            'Near the bottom, the mobile card must open above the mention');
+        assert.ok(edgeCardBounds.x >= 8 && edgeCardBounds.x + edgeCardBounds.width <= 382,
+            'Near the right edge, the mobile card must stay inside the screen');
+        await touchPage.locator('.bb-map-mention-close').tap();
+        await touchPage.evaluate(() => document.getElementById('touch-message').removeAttribute('style'));
+        await touchPage.waitForTimeout(100);
+
+        // Tavern resets menu scroll when focus leaves a scroll-reset-container.
+        await touchPage.evaluate(() => {
+            const menu = document.createElement('div');
+            menu.id = 'test-tavern-menu'; menu.className = 'scroll-reset-container';
+            menu.style.cssText = 'height:35px;overflow:auto';
+            menu.innerHTML = '<div style="height:200px"><button id="test-menu-focus">Menu</button></div>';
+            document.body.append(menu);
+        });
+        await touchPage.addScriptTag({ content: `${keyboard}\ninitKeyboard();` });
+        await touchPage.evaluate(() => {
+            const menu = document.getElementById('test-tavern-menu');
+            document.getElementById('test-menu-focus').focus(); menu.scrollTop = 100;
+        });
+        await touchPage.waitForTimeout(100);
+        await touchPage.evaluate(() => document.querySelector('[data-bb-map-mention]').click());
+        await touchPage.waitForTimeout(300);
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 1, 'Tavern menu focus reset must not dismiss the card');
+        await touchPage.evaluate(() => {
+            document.getElementById('test-tavern-menu').dispatchEvent(new Event('scroll'));
+        });
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 1, 'Unrelated menu scrolling must not dismiss the card');
+        await touchPage.setViewportSize({ width: 390, height: 640 });
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 1, 'Mobile keyboard viewport changes must preserve the card');
+        const cardBounds = await touchPage.locator('#bb-map-mention-card').boundingBox();
+        assert.ok(cardBounds.x >= 0 && cardBounds.x + cardBounds.width <= 390 && cardBounds.y >= 0 && cardBounds.y + cardBounds.height <= 640,
+            `Card must be inside the mobile screen: ${JSON.stringify(cardBounds)}`);
+        await touchPage.evaluate(() => document.getElementById('chat').dispatchEvent(new Event('scroll')));
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 0, 'Scrolling the message must still dismiss the card');
+        await touchPage.locator('[data-bb-map-mention]').first().focus();
+        await touchPage.keyboard.press('Enter');
+        assert.equal(await touchPage.locator('.bb-map-mention-close').evaluate(element => element === document.activeElement), true);
+        await touchPage.waitForTimeout(100);
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 1, 'Keyboard activation remains available with Tavern handlers');
+        await touchPage.locator('.bb-map-mention-close').tap();
+        await touchPage.evaluate(() => {
+            const range = document.createRange(); range.selectNodeContents(document.querySelector('[data-bb-map-mention]'));
+            getSelection().removeAllRanges(); getSelection().addRange(range);
+            document.querySelector('[data-bb-map-mention]').click();
+        });
+        assert.equal(await touchPage.locator('#bb-map-mention-card').count(), 0, 'Selecting a mention must not open its card');
+        await touchPage.evaluate(() => {
+            getSelection().removeAllRanges();
+            document.getElementById('touch-message').textContent = 'Она открыла дверь медным ключом. Ключ, медного ключа.';
+        });
+        await touchPage.waitForFunction(() => document.querySelectorAll('#touch-message [data-bb-map-mention]').length === 1);
+        assert.equal(await touchPage.locator('#touch-message [data-bb-map-mention]').textContent(), 'медным ключом');
+        await touchPage.locator('#touch-message [data-bb-map-mention]').tap();
+        assert.equal(await touchPage.locator('#bb-map-mention-title').textContent(), 'Медный ключ');
+        await touchPage.locator('.bb-map-mention-close').tap();
+        await touchPage.evaluate(() => {
+            raw = { ...raw, zones: [{ ...raw.zones[0], poi: ['Медный ключ', 'Железный ключ'] }] };
+            document.getElementById('touch-message').textContent = 'Ключом. Медного ключа. Железным ключом.';
+            controller.refresh();
+        });
+        await touchPage.waitForFunction(() => document.querySelectorAll('#touch-message [data-bb-map-mention]').length === 2);
+        assert.deepEqual(await touchPage.locator('#touch-message [data-bb-map-mention]').allTextContents(), ['Медного ключа', 'Железным ключом']);
+        await touchPage.locator('#touch-message [data-bb-map-mention]').last().tap();
+        assert.equal(await touchPage.locator('#bb-map-mention-title').textContent(), 'Железный ключ');
+        await phone.close();
         await page.evaluate(() => chatMapLinks.destroy());
         assert.equal(await mentions.count(), 0);
         assert.equal(await page.locator('.mes_text').first().textContent(), initialText);

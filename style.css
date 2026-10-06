@@ -464,7 +464,11 @@
 .bb-map-mention-threat.is-tension { color: #fbbf24; }
 .bb-map-mention-threat.is-danger { color: #f87171; }
 @media (max-width: 600px) {
-    .bb-map-mention-card { left: 8px; right: 8px; bottom: 12px; width: auto; max-height: 60vh; border-top-width: 2px; }
+    .bb-map-mention-card { right: auto; bottom: auto; width: min(260px, calc(100vw - 16px)); max-height: 40vh; border-top-width: 2px; padding: 10px 12px; line-height: 1.35; }
+    .bb-map-mention-card h3 { font-size: 15px; margin: 3px 24px 6px 0; }
+    .bb-map-mention-card p { margin: 5px 0; }
+    .bb-map-mention-source { padding-top: 6px; margin-top: 6px; }
+    .bb-map-mention-open { padding: 6px; margin-top: 6px; }
 }
 .bb-map-widget-places { position: relative; width: 100%; }
 .bb-map-widget-places > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }

@@ -88,7 +88,9 @@ The result is appended to your draft without sending it. Use Enhance's cancel co
 
 Enable **Highlight map mentions in chat** under **Interface**. Each entity is highlighted once per message: full name, unique first name and surname share one allowance. Supported honorifics and visual spacing such as `ㅤ` do not create duplicates.
 
-Matching is local and does not rewrite messages or request the model. Ambiguous names, code, links and inputs are skipped. Inflections, arbitrary nicknames, transliterations and names split across HTML elements are not matched.
+Common objects support Russian inflections and unambiguous short names: «Медный ключ» also matches «медным ключом» or «ключа». If the map contains multiple keys, the short mention is skipped. All forms of one object share one highlight. Unknown and complex labels still require their full name.
+
+Matching is local and does not rewrite messages or request the model. Ambiguous mentions, hidden blocks, code, links and inputs are skipped. Character name inflections, arbitrary nicknames, transliterations and names split across HTML elements are not matched.
 
 ## Context and integrations
 

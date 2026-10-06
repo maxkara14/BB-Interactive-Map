@@ -18,7 +18,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<body style="margin:0;background:#10151b;color:#e2e8f0"><div id="chat"></div><div id="extensions_settings"></div><textarea id="send_textarea"></textarea></body>');
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}
+        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-object-mentions.js'))}\n${strip(read('map-links.js'))}
             var event_types = ${events};
             var handlers = new Map(), macros = new Map();
             var eventSource = { on: (name, callback) => handlers.set(name, [...(handlers.get(name) || []), callback]) };

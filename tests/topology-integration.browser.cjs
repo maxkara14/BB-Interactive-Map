@@ -13,7 +13,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         const errors = []; page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<body style="background:#10151b;color:#e2e8f0"><div id="extensions_settings"></div><textarea id="send_textarea"></textarea><button id="scan">Scan</button></body>');
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
+        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-object-mentions.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
             var extension_settings = { 'BB-Interactive-Map': { uiLanguage: 'ru', scanScale: 'global', widgetCollapsed: false, autoApply: true, autoUpdate: true } };
             var chat_metadata = { bb_map_mode: 'game' }, saves = 0, calls = [], notices = [];
             var messages = Object.freeze([Object.freeze({ name: 'Player', mes: 'Я стою в зале.', is_user: true }), Object.freeze({ name: 'Мира', mes: 'Мира открывает дверь в галерею.' })]);

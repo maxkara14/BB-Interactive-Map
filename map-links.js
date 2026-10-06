@@ -1,4 +1,5 @@
 import { poiName } from './map-state.js';
+import { objectMentionAliases, objectMentionBlockers } from './map-object-mentions.js';
 
 const MARKER = 'data-bb-map-mention';
 const SKIP = `a, button, input, textarea, select, label, summary, pre, code, script, style, svg, math, [hidden], [aria-hidden="true"], [contenteditable], [role="button"], [${MARKER}]`;
@@ -13,7 +14,14 @@ export function createMapMentionIndex(raw) {
         if (!entry.name) return;
         const key = mentionKey(name);
         if (!key) return;
-        groups.set(key, [...(groups.get(key) || []), entry]);
+        const values = groups.get(key) || [];
+        if (!values.includes(entry)) groups.set(key, [...values, entry]);
+    };
+    const addObject = entry => {
+        if (!entry.name) return;
+        add(entry);
+        for (const alias of objectMentionAliases(entry.name)) add(entry, alias);
+        for (const blocker of objectMentionBlockers(entry.name)) groups.set(blocker, [...(groups.get(blocker) || []), null]);
     };
     for (const zone of Array.isArray(raw?.zones) ? raw.zones : []) {
         if (!zone || typeof zone !== 'object') continue;
@@ -21,15 +29,16 @@ export function createMapMentionIndex(raw) {
         if (typeof zone.name === 'string') add({ type: 'zone', name: zone.name.trim(), description: zone.summary || '',
             threat: zone.threat_level || 'safe', reason: zone.threat_reason || '', ...location });
         for (const value of Array.isArray(zone.poi) ? zone.poi : []) {
-            add({ type: 'object', name: poiName(value), description: value?.description || '',
+            addObject({ type: 'object', name: poiName(value), description: value?.description || '',
                 item_state: value?.item_state, holder: value?.holder || '', last_known: value?.last_known || '', ...location });
         }
         for (const value of Array.isArray(zone.characters) ? zone.characters : []) {
             const entry = { type: 'character', name: poiName(value), description: value?.description || '',
                 mood: value?.mood || '', attitude: value?.attitude || '', ...location };
             add(entry);
-            const parts = mentionKey(entry.name).split(' ');
-            if (parts.length > 1) {
+            const parts = entry.name.split(new RegExp(`${separators}+`, 'u'));
+            // Descriptions such as "Две спорящие ученицы" are not personal names.
+            if (parts.length > 1 && parts.every(part => /^\p{Lu}[\p{L}\p{M}-]+$/u.test(part))) {
                 for (const part of new Set([parts[0], parts.at(-1)])) {
                     if (/^[\p{L}\p{M}]{2,}$/u.test(part)) add(entry, part);
                 }
@@ -38,9 +47,9 @@ export function createMapMentionIndex(raw) {
     }
     for (const item of raw?.unlocated_objects || []) {
         if (item.item_state !== 'held') continue;
-        add({ ...item, type: 'object', zone: '', position: '' });
+        addObject({ ...item, type: 'object', zone: '', position: '' });
     }
-    const entries = new Map([...groups].filter(([, values]) => values.length === 1).map(([key, values]) => [key, values[0]]));
+    const entries = new Map([...groups].filter(([, values]) => values.length === 1 && values[0]).map(([key, values]) => [key, values[0]]));
     // Ambiguous long names still block shorter matches inside their phrase.
     const names = [...groups.keys()].sort((a, b) => b.length - a.length);
     // Unicode boundaries also work for Cyrillic; a hyphenated word is not a partial match.
@@ -113,8 +122,23 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT, {
             acceptNode: node => node.parentElement?.closest(SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
         });
+        // Hidden scene widgets must not consume the visible message's mention slots.
+        const visibility = new Map();
+        const visible = element => {
+            if (!element) return true;
+            if (visibility.has(element)) return visibility.get(element);
+            const style = getComputedStyle(element);
+            const result = style.display !== 'none' && style.visibility !== 'hidden'
+                && style.visibility !== 'collapse' && style.opacity !== '0'
+                && (!(element instanceof HTMLDetailsElement) || element.open)
+                && visible(element.parentElement);
+            visibility.set(element, result);
+            return result;
+        };
         const nodes = [];
-        while (walker.nextNode()) nodes.push(walker.currentNode);
+        while (walker.nextNode()) {
+            if (visible(walker.currentNode.parentElement)) nodes.push(walker.currentNode);
+        }
         // Aliases share an index entry. Count once across all text nodes in this message.
         const seenEntities = new Set();
         for (const node of nodes) {
@@ -143,7 +167,7 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
     const observe = () => {
         if (root && isEnabled() && index.pattern) observer.observe(root, {
             childList: true, characterData: true, subtree: true, attributes: true,
-            attributeFilter: ['contenteditable', 'hidden', 'aria-hidden', 'role'],
+            attributeFilter: ['contenteditable', 'hidden', 'aria-hidden', 'role', 'class', 'style', 'open'],
         });
     };
     const flush = () => {
@@ -174,7 +198,39 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         if (anchor && !anchor.isConnected) closeCard();
         if (pending.size) schedule();
     });
-    const openCard = span => {
+    const positionCard = () => {
+        if (!card || !anchor) return;
+        card.style.removeProperty('left');
+        card.style.removeProperty('top');
+        card.style.bottom = 'auto';
+        card.style.removeProperty('width');
+        const bounds = anchor.getBoundingClientRect();
+        if (window.innerWidth <= 600) {
+            // Tavern's transformed <html> has zero height when mobile <body> is fixed.
+            // Position explicitly near the mention, using the visible viewport.
+            const viewport = window.visualViewport;
+            const height = viewport?.height ?? window.innerHeight;
+            const topEdge = (viewport?.offsetTop ?? 0) + 8;
+            const bottomEdge = topEdge + height - 16;
+            const leftEdge = (viewport?.offsetLeft ?? 0) + 8;
+            const width = viewport?.width ?? window.innerWidth;
+            const below = Math.max(0, bottomEdge - bounds.bottom - 8);
+            const above = Math.max(0, bounds.top - topEdge - 8);
+            card.style.width = `${Math.max(0, Math.min(260, width - 16))}px`;
+            card.style.maxHeight = `${Math.min(window.innerHeight * 0.4, Math.max(above, below), Math.max(0, height - 16))}px`;
+            const size = card.getBoundingClientRect();
+            const top = below >= size.height ? bounds.bottom + 8 : bounds.top - size.height - 8;
+            card.style.left = `${Math.max(leftEdge, Math.min(bounds.left, leftEdge + width - 16 - size.width))}px`;
+            card.style.top = `${Math.max(topEdge, Math.min(top, bottomEdge - size.height))}px`;
+            return;
+        }
+        card.style.removeProperty('max-height');
+        const size = card.getBoundingClientRect();
+        const top = bounds.bottom + 8 + size.height <= window.innerHeight - 8 ? bounds.bottom + 8 : bounds.top - size.height - 8;
+        card.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - size.width - 8))}px`;
+        card.style.top = `${Math.max(8, Math.min(top, window.innerHeight - size.height - 8))}px`;
+    };
+    const openCard = (span, keyboard = false) => {
         const entry = index.entries.get(span.getAttribute(MARKER));
         if (!entry || !isEnabled()) return;
         if (anchor === span) { closeCard(true); return; }
@@ -229,31 +285,37 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
         open.onclick = () => { closeCard(); onOpenMap(entry); };
         card.append(source, open);
         document.body.append(card);
-        if (window.innerWidth > 600) {
-            const bounds = span.getBoundingClientRect();
-            const size = card.getBoundingClientRect();
-            const top = bounds.bottom + 8 + size.height <= window.innerHeight - 8 ? bounds.bottom + 8 : bounds.top - size.height - 8;
-            card.style.left = `${Math.max(8, Math.min(bounds.left, window.innerWidth - size.width - 8))}px`;
-            card.style.top = `${Math.max(8, Math.min(top, window.innerHeight - size.height - 8))}px`;
-        }
-        close.focus({ preventScroll: true });
+        positionCard();
+        // Pointer activation must not steal focus from Tavern's input or menus.
+        if (keyboard) close.focus({ preventScroll: true });
     };
     const click = event => {
-        if (event.type === 'click' && window.getSelection()?.isCollapsed === false) return;
         const span = event.target.closest?.(`[${MARKER}]`);
-        if (span && root?.contains(span)) { event.preventDefault(); event.stopPropagation(); openCard(span); }
+        if (span && root?.contains(span)) {
+            const selection = window.getSelection();
+            // A selection elsewhere in the chat must not disable taps on every mention.
+            if (event.type === 'click' && selection && !selection.isCollapsed
+                && Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i)).some(range => range.intersectsNode(span))) return;
+            event.preventDefault(); event.stopPropagation(); openCard(span, event.type === 'keydown');
+        }
     };
+    const change = event => { queueNode(event.target); if (pending.size) schedule(); };
     const keydown = event => {
         if ((event.key === 'Enter' || event.key === ' ') && event.target.matches?.(`[${MARKER}]`)) click(event);
     };
     const outside = event => { if (card && !card.contains(event.target) && !anchor?.contains(event.target)) closeCard(); };
     const escape = event => { if (card && event.key === 'Escape') { event.preventDefault(); closeCard(true); } };
-    const scroll = event => { if (card && !card.contains(event.target)) closeCard(); };
-    const resize = () => closeCard();
+    const scroll = event => {
+        if (card && (event.target === document || event.target.contains?.(anchor))) closeCard();
+    };
+    // Hiding the mobile keyboard changes the viewport; keep the newly opened card.
+    const resize = () => positionCard();
     document.addEventListener('pointerdown', outside);
     document.addEventListener('keydown', escape);
     document.addEventListener('scroll', scroll, true);
     window.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('scroll', resize);
     return {
         refresh() {
             if (destroyed) return;
@@ -268,11 +330,13 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
             closeCard();
             observer.disconnect();
             if (root !== nextRoot) {
-                root?.removeEventListener('click', click);
+                root?.removeEventListener('click', click, true);
                 root?.removeEventListener('keydown', keydown);
+                root?.removeEventListener('change', change);
                 root = nextRoot;
-                root?.addEventListener('click', click);
+                root?.addEventListener('click', click, true);
                 root?.addEventListener('keydown', keydown);
+                root?.addEventListener('change', change);
             }
             index = createMapMentionIndex(map);
             refreshAll = true;
@@ -285,12 +349,15 @@ export function createChatMapLinks({ getMap, isEnabled, getLabels, onOpenMap }) 
             observer.disconnect();
             closeCard();
             for (const text of root?.querySelectorAll('.mes_text') || []) unwrap(text);
-            root?.removeEventListener('click', click);
+            root?.removeEventListener('click', click, true);
             root?.removeEventListener('keydown', keydown);
+            root?.removeEventListener('change', change);
             document.removeEventListener('pointerdown', outside);
             document.removeEventListener('keydown', escape);
             document.removeEventListener('scroll', scroll, true);
             window.removeEventListener('resize', resize);
+            window.visualViewport?.removeEventListener('resize', resize);
+            window.visualViewport?.removeEventListener('scroll', resize);
             pending.clear();
         },
     };

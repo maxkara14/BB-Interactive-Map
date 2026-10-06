@@ -18,7 +18,7 @@ const events = fs.readFileSync(path.resolve(root, '../../../../scripts/events.js
         await page.setContent('<body style="background:#111;color:#ddd"><div id="chat"></div><div id="extensions_settings"></div><form id="send_form"><textarea id="send_textarea"></textarea></form></body>');
         await page.addStyleTag({ content: read(root, 'style.css') + read(enhance, 'style.css') });
         await page.addScriptTag({ content: `${['core.js', 'ui.js', 'narrative.js', 'writing.js', 'writing-ui.js', 'd20.js', 'player-action.js', 'map-context.js'].map(file => strip(read(enhance, file))).join('\n')}
-            ${strip(read(root, 'map-state.js'))}\n${strip(read(root, 'map-links.js'))}\n${strip(read(root, 'map-topology-view.js'))}
+            ${strip(read(root, 'map-state.js'))}\n${strip(read(root, 'map-object-mentions.js'))}\n${strip(read(root, 'map-links.js'))}\n${strip(read(root, 'map-topology-view.js'))}
             var event_types = ${events}; var handlers = new Map();
             var eventSource = { on: (name, fn) => handlers.set(name, [...(handlers.get(name) || []), fn]) };
             var emit = async (name, ...args) => { for (const fn of handlers.get(event_types[name]) || []) await fn(...args); };

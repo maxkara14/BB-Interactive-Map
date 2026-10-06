@@ -4,6 +4,15 @@
 
 ## Русский
 
+### 2.0.1 — 6 октября 2026
+
+- Исправлена подсветка упоминаний в сообщениях: скрытые панели больше не забирают подсветку у видимого текста. Описательные названия персонажей вроде «Две спорящие ученицы» больше не подсвечивают отдельные обычные слова.
+- Для распространённых предметов добавлены русские словоформы и однозначные короткие названия: «Медный ключ» распознаётся по «медным ключом» или «ключа». При нескольких ключах короткое упоминание пропускается; неизвестные и сложные названия по-прежнему сопоставляются целиком.
+- Исправлено открытие карточек по нажатию на телефоне, включая страницы с преобразованным корневым элементом. Обработчики сообщений, постороннее выделение текста и сброс прокрутки меню больше не мешают открытию.
+- Мобильные карточки стали узкими и компактными: открываются под упоминанием, а при нехватке места снизу — над ним. Сохраняются все данные и прокрутка длинного содержимого; карточка остаётся в пределах видимой области экрана.
+- Изменение размера экрана больше не закрывает карточку, а прокрутка постороннего меню не мешает её чтению. Сохранено управление с клавиатуры.
+- Обновлены подсказки и README на русском и английском с возможностями и ограничениями распознавания упоминаний.
+
 ### 2.0.0 — 4 октября 2026
 
 Изменения относительно **1.1.0**.
@@ -47,6 +56,15 @@
 Сканирование последних сообщений, сетка 3×3, масштабы «Комната / Здание», персонажи и объекты, обозначения угроз, сохранение памяти текущего чата, автоматическая вставка или `{{bb_map}}`, основное подключение и OpenAI-compatible Custom API.
 
 ## English
+
+### 2.0.1 — October 6, 2026
+
+- Fixed mention highlighting: hidden panels no longer consume highlights intended for visible message text. Descriptive character labels such as «Две спорящие ученицы» no longer highlight individual common words.
+- Added Russian inflections and unambiguous short names for common objects: «Медный ключ» also matches «медным ключом» or «ключа». Short mentions are skipped when multiple keys exist; unknown and complex labels still require their full name.
+- Fixed tapping mention cards on phones, including pages with a transformed root element. Message handlers, unrelated text selections and menu scroll resets no longer prevent opening cards.
+- Mobile cards are now narrow and compact, opening below the mention or above it when space is limited. All information remains available with internal scrolling, and cards stay within the visible viewport.
+- Resizing the viewport no longer closes cards, and scrolling an unrelated menu no longer interrupts reading. Keyboard controls are preserved.
+- Updated Russian and English hints and READMEs to explain mention matching and its limitations.
 
 ### 2.0.0 — October 4, 2026
 

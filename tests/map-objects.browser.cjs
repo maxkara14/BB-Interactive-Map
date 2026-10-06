@@ -15,7 +15,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<body style="background:#10151b;color:#e2e8f0"><div id="chat"><div class="mes"><div class="mes_text">Мира взяла Боккэн.</div></div></div></body>');
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
+        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-object-mentions.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
             var extension_settings = { 'BB-Interactive-Map': { uiLanguage: 'ru', autoUpdate: true, autoApply: true, showWidget: false } };
             var chat_metadata = { bb_map_mode: 'game' };
             var messages = Object.freeze([Object.freeze({ name: 'Мира', mes: 'Мира берёт меч.' })]);

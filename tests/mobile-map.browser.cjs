@@ -12,7 +12,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         const errors = []; page.on('pageerror', error => errors.push(error.message));
         await page.setContent('<meta name="viewport" content="width=device-width,initial-scale=1"><body style="margin:0;background:#10151b;color:#e2e8f0"><div id="extensions_settings"></div><textarea id="send_textarea"></textarea></body>');
         await page.addStyleTag({ content: read('style.css') });
-        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
+        await page.addScriptTag({ content: `${strip(read('map-state.js'))}\n${strip(read('map-object-mentions.js'))}\n${strip(read('map-links.js'))}\n${strip(read('map-topology-view.js'))}
             var extension_settings = { 'BB-Interactive-Map': { uiLanguage: 'ru', widgetCollapsed: false } }, chat_metadata = { bb_map_mode: 'game' }, writes = 0, scans = 0, notices = [];
             var context = { chatId: 'one', characterId: 1, groupId: null, chatMetadata: chat_metadata, chat: [{ name: 'Character', mes: 'Мира стоит в трапезной.' }], name1: 'Player' };
             var SillyTavern = { getContext: () => context }, toastr = Object.fromEntries(['error','warning','info','success'].map(key => [key, text => notices.push(text)]));
