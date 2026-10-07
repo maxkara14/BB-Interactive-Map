@@ -59,7 +59,7 @@ Drag the widget header to move it; its focused header also accepts arrow keys. P
 Enable **Prepare update after reply**. A completed character reply or reroll triggers one map request. Existing memory remains in use while the proposal is prepared.
 
 - By default, the proposal waits for review and saving.
-- **Save updates automatically** applies suitable updates immediately and keeps the previous map for rollback.
+- **Save updates automatically** enables updates after replies and applies suitable updates immediately, including an existing proposal, keeping the previous map for rollback. The first map can be created automatically after a character reply without a prior manual save.
 - Uncertain position, places, passages, possession or effects may require review. An unresolved proposal pauses further automatic requests.
 
 Cancelled responses are discarded. Changing chats prevents a late result from replacing another chat's map. Updates use a separate request and do not create a character reply.

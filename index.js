@@ -46,6 +46,9 @@ let autoScanTimer = null;
 let autoCandidate = null;
 let autoCandidateChat = null;
 let autoCandidateBase = null;
+let autoCandidateReply = null;
+let autoCandidateText = null;
+let autoCandidateMode = null;
 let autoStatus = 'idle';
 let chatMapLinks = null;
 let mapTravelController = null;
@@ -1125,13 +1128,47 @@ function resetAutoUpdate() {
     autoCandidate = null;
     autoCandidateChat = null;
     autoCandidateBase = null;
+    autoCandidateReply = null;
+    autoCandidateText = null;
+    autoCandidateMode = null;
     autoStatus = 'idle';
+}
+
+function canAutoApplyMap(baseMap, candidate, chat) {
+    return !hasLegacyObjectMemory(baseMap?.raw) && !requiresTopologyReview(baseMap?.raw, candidate)
+        && !(getMapMode(chat_metadata) === 'game' && (requiresObjectReview(baseMap?.raw, candidate, chat.name1)
+            || requiresEffectReview(baseMap?.raw, candidate)));
+}
+
+async function setAutoApply(checked) {
+    settings.autoApply = checked;
+    if (checked) settings.autoUpdate = true;
+    saveSettingsDebounced();
+    if (checked && autoCandidate) {
+        const chat = SillyTavern.getContext();
+        if (!isSameChat(autoCandidateChat, chat) || getMapDataForCurrentChat() !== autoCandidateBase
+            || chat.chat?.at(-1) !== autoCandidateReply || autoCandidateReply?.mes !== autoCandidateText
+            || getMapMode(chat_metadata) !== autoCandidateMode) {
+            resetAutoUpdate();
+        } else if (canAutoApplyMap(autoCandidateBase, autoCandidate, chat)) {
+            chat_metadata.bb_map_data = createSavedMap(autoCandidate, autoCandidateBase);
+            resetAutoUpdate();
+            autoStatus = 'updated';
+            injectCurrentMapContext();
+            renderMapWidget();
+            setupExtensionSettings(true);
+            await saveChatConditional();
+            return;
+        }
+    }
+    renderMapWidget();
+    setupExtensionSettings(true);
 }
 
 function queueAutoScan(chatForScan) {
     clearTimeout(autoScanTimer);
     if (autoStatus !== 'waiting' && settings.autoUpdate && !autoCandidate
-        && isSameChat(chatForScan, SillyTavern.getContext()) && getMapDataForCurrentChat()?.raw) {
+        && isSameChat(chatForScan, SillyTavern.getContext())) {
         autoStatus = 'waiting';
         renderMapWidget();
     }
@@ -1139,10 +1176,6 @@ function queueAutoScan(chatForScan) {
         autoScanTimer = null;
         if (!settings.autoUpdate || generationStopped || autoCandidate) return;
         if (!isSameChat(chatForScan, SillyTavern.getContext())) return;
-        if (!getMapDataForCurrentChat()?.raw) {
-            autoStatus = 'idle';
-            return;
-        }
         if (document.body.dataset.generating || isChatSaving || scanInProgress) {
             queueAutoScan(chatForScan);
             return;
@@ -1161,9 +1194,7 @@ function queueAutoScan(chatForScan) {
                 if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle';
                 return;
             }
-            if (settings.autoApply && !hasLegacyObjectMemory(baseMap.raw) && !requiresTopologyReview(baseMap.raw, candidate)
-                && !(getMapMode(chat_metadata) === 'game' && (requiresObjectReview(baseMap.raw, candidate, chatForScan.name1)
-                    || requiresEffectReview(baseMap.raw, candidate)))) {
+            if (settings.autoApply && canAutoApplyMap(baseMap, candidate, chatForScan)) {
                 chat_metadata.bb_map_data = createSavedMap(candidate, baseMap);
                 await saveChatConditional();
                 if (isSameChat(chatForScan, SillyTavern.getContext())) {
@@ -1176,6 +1207,9 @@ function queueAutoScan(chatForScan) {
             autoCandidate = candidate;
             autoCandidateChat = chatForScan;
             autoCandidateBase = getMapDataForCurrentChat();
+            autoCandidateReply = reply;
+            autoCandidateText = replyText;
+            autoCandidateMode = getMapMode(chat_metadata);
             autoStatus = 'ready';
         } catch {
             if (operation.controller.signal.aborted) { if (isSameChat(chatForScan, SillyTavern.getContext())) autoStatus = 'idle'; return; }
@@ -1425,12 +1459,8 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         renderMapWidget();
     });
-    checkbox(mapTools, tr('Сохранять обновление автоматически', 'Save updates automatically'), settings.autoApply, checked => {
-        settings.autoApply = checked;
-        if (checked) resetAutoUpdate();
-        saveSettingsDebounced();
-        renderMapWidget();
-    });
+    checkbox(mapTools, tr('Сохранять обновление автоматически', 'Save updates automatically'), settings.autoApply,
+        checked => void setAutoApply(checked).catch(() => toastr.error(tr('Не удалось сохранить карту.', 'Could not save the map.'), 'BB Map')));
     note(mapTools, tr('После ответа персонажа — один запрос к выбранной модели. Без автосохранения обновление ждёт проверки; с автосохранением карта сразу заменяется, а предыдущую можно восстановить.',
         'After a character reply, one request goes to the selected model. Without automatic saving, the update waits for review; with it, the map is replaced and the previous version can be restored.'));
     const scan = action(mapTools, tr('Запустить новый скан', 'Start new scan'), () => {

@@ -104,6 +104,89 @@ test('incomplete legacy Custom API settings still use the main connection', asyn
     assert.equal(await map.generateMapFast('Map this scene'), '{"main":true}');
 });
 
+async function autoSaveFixture({ saved = true, uncertain = false, mode = 'classic' } = {}) {
+    const state = await import('../map-state.js');
+    const raw = state.normalizeGraphMapData({ layout: 'graph', scope: 'scene', schematic_name: 'Hall',
+        player_place_id: 'hall', zones: [{ id: 'hall', name: 'Hall', kind: 'room', uncertain }], connections: [] });
+    const metadata = { bb_map_mode: mode, ...(saved ? { bb_map_data: state.createSavedMap(raw) } : {}) };
+    const chat = { chatId: 'one', characterId: 1, groupId: null, chatMetadata: metadata,
+        name1: 'Player', chat: [{ mes: 'Player is in the hall.', is_user: false }] };
+    const timers = new Map();
+    let timerId = 0;
+    const context = { ...state,
+        extension_settings: { 'BB-Interactive-Map': { autoUpdate: true } }, chat_metadata: metadata,
+        SillyTavern: { getContext: () => chat }, navigator: { language: 'en' },
+        document: { body: { dataset: {} }, querySelectorAll: () => [] }, AbortController,
+        setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
+        clearTimeout: id => timers.delete(id), isChatSaving: false,
+        saveSettingsDebounced: () => {}, saveChatConditional: async () => { context.saves++; },
+        saves: 0, requests: 0, console, raw,
+    };
+    vm.runInNewContext(`${setupSource}
+        renderMapWidget = injectCurrentMapContext = setupExtensionSettings = () => {};
+        createMapCandidate = async () => { globalThis.requests++; return raw; };
+        globalThis.api = { settings, setAutoApply, handleMessageReceived, resetAutoUpdate,
+            state: () => ({ candidate: autoCandidate, status: autoStatus }) };
+    `, context);
+    return { context, metadata, chat, api: context.api, flush: async () => {
+        const entry = timers.entries().next().value;
+        assert.ok(entry, 'expected an automatic scan');
+        timers.delete(entry[0]);
+        await entry[1]();
+    } };
+}
+
+test('enabling automatic saving applies a ready safe update without another request', async () => {
+    const { context, metadata, api, flush } = await autoSaveFixture();
+    const original = metadata.bb_map_data;
+    api.handleMessageReceived(0, 'normal'); await flush();
+    assert.ok(api.state().candidate);
+    await api.setAutoApply(true);
+    assert.equal(context.saves, 1);
+    assert.equal(context.requests, 1);
+    assert.equal(api.state().status, 'updated');
+    assert.equal(api.state().candidate, null);
+    assert.equal(metadata.bb_map_data.previous.raw, original.raw);
+});
+
+test('enabling automatic saving preserves ambiguous updates for manual review', async () => {
+    const { context, api, flush } = await autoSaveFixture({ uncertain: true });
+    api.handleMessageReceived(0, 'normal'); await flush();
+    const candidate = api.state().candidate;
+    await api.setAutoApply(true);
+    assert.equal(api.state().candidate, candidate);
+    assert.equal(api.state().status, 'ready');
+    assert.equal(context.saves, 0);
+});
+
+test('automatic saving enables updates and creates the first saved map after a reply', async () => {
+    for (const mode of ['classic', 'game']) {
+        const { context, metadata, api, flush } = await autoSaveFixture({ saved: false, mode });
+        api.settings.autoUpdate = false;
+        await api.setAutoApply(true);
+        assert.equal(api.settings.autoUpdate, true);
+        assert.equal(context.requests, 0);
+        api.handleMessageReceived(0, 'normal'); await flush();
+        assert.equal(context.saves, 1);
+        assert.equal(metadata.bb_map_data.raw.schematic_name, 'Hall');
+        assert.equal(metadata.bb_map_data.previous, null);
+    }
+});
+
+test('enabling automatic saving discards a candidate made stale by a reply, mode, map or chat change', async () => {
+    for (const change of ['reply', 'mode', 'map', 'chat']) {
+        const { context, metadata, chat, api, flush } = await autoSaveFixture();
+        api.handleMessageReceived(0, 'normal'); await flush();
+        if (change === 'reply') chat.chat[0].mes = 'Player is elsewhere.';
+        if (change === 'mode') metadata.bb_map_mode = 'game';
+        if (change === 'map') metadata.bb_map_data = { ...metadata.bb_map_data };
+        if (change === 'chat') context.SillyTavern.getContext = () => ({ ...chat, chatId: 'two' });
+        await api.setAutoApply(true);
+        assert.equal(context.saves, 0, change);
+        assert.equal(api.state().candidate, null, change);
+    }
+});
+
 test('automatic scan follows character replies and saves only in automatic mode', async () => {
     const timers = [];
     const metadata = { bb_map_data: { raw: { zones: [] } } };
