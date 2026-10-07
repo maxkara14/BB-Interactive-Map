@@ -4,7 +4,7 @@
 
 ## Русский
 
-### 2.0.3 — 8 октября 2026
+### 2.0.2 — 8 октября 2026
 
 - На телефоне кнопка «Отменить правки» в редакторе занимает полную ширину, как «Проверить правки».
 - Обычные обновления сохраняют ID текущей архивной записи при переименовании сцены и `null` от модели. Отдельная новая сцена требует основания из сюжета; неясная граница предлагает выбор текущей или новой записи. Заголовок-пример `Location` не заменяет название продолжающейся сцены.
@@ -81,7 +81,7 @@
 
 ## English
 
-### 2.0.3 — October 8, 2026
+### 2.0.2 — October 8, 2026
 
 - On mobile, the editor's “Cancel edits” button spans the full width like “Preview edits”.
 - Ordinary updates keep the active archive entry ID across scene renaming and model `null` IDs. A distinct new scene needs narrative evidence; unclear boundaries offer a current/new entry choice. The example title `Location` no longer replaces a continuing scene title.

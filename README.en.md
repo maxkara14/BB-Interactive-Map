@@ -4,7 +4,7 @@
 
 A **SillyTavern** extension that turns story events into a map of places and passages. Track your position, characters, objects and scene conditions, and give the model spatial memory of the current chat.
 
-**Version 2.0.3**
+**Version 2.0.2**
 
 ![BB Interactive Map — actual interface overview](docs/images/overview.en.png)
 
