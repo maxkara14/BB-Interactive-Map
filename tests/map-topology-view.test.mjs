@@ -59,3 +59,18 @@ test('short passage labels have room between places on a narrow map', () => {
         assert.ok(Math.hypot(b.x - a.x, b.y - a.y) >= 70);
     }
 });
+
+test('measured place heights reserve enough space for full text and preserve passage clearance', () => {
+    const raw = normalizeGraphMapData({ layout: 'graph', scope: 'scene', schematic_name: 'Gorge', player_place_id: 'entrance',
+        zones: [{ id: 'entrance', name: 'Вход в базальтовое ущелье Никко', kind: 'outdoor', threat_level: 'danger' },
+            { id: 'ledge', name: 'Базальтовый карниз над ущельем', kind: 'outdoor', threat_level: 'danger', uncertain: true }],
+        connections: [{ from: 'entrance', to: 'ledge', name: 'Связь', kind: 'unknown', status: 'uncertain' }] });
+    const measurements = new Map(raw.zones.map((zone, i) => [zone.id, i ? 360 : 260]));
+    for (const width of [270, 390, 768]) {
+        const { nodes, height } = layoutMapPlaces(raw, width, measurements);
+        assert.deepEqual(nodes.map(node => node.height), [260, 360]);
+        assert.ok(nodes.every(node => node.y - node.height / 2 >= 0 && node.y + node.height / 2 <= height));
+        const [a, b] = layoutMapPassage(nodes[0], nodes[1], nodes, width);
+        assert.ok(Math.hypot(b.x - a.x, b.y - a.y) >= 70);
+    }
+});

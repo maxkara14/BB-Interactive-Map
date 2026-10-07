@@ -36,15 +36,16 @@ export function layoutMiniMap(raw) {
     return { nodes, edges, height, extra: ids.length - 1 - visible.length };
 }
 
-export function layoutMapPlaces(raw, width) {
+export function layoutMapPlaces(raw, width, measuredHeights = new Map()) {
     const columns = width < 500 ? 2 : 3;
     const gap = width < 500 ? 70 : 90;
     const cell = (width - 24 - gap * (columns - 1)) / columns;
     const size = zone => {
         const w = Math.min(cell, zone.kind === 'passage' ? 198 : zone.kind === 'outdoor' ? 186 : 168);
-        const lines = Math.min(3, Math.ceil(zone.name.length / Math.max(10, (w - 20) / 7)));
+        const lines = Math.ceil(zone.name.length / Math.max(10, (w - 20) / 7));
         const flags = Number(zone.id === raw.player_place_id) + Number(zone.threat_level !== 'safe') + Number(zone.uncertain);
-        return { w, height: Math.max(zone.kind === 'passage' ? 78 : zone.kind === 'outdoor' ? 118 : 106, 42 + lines * 19 + flags * 19) };
+        return { w, height: Math.max(zone.kind === 'passage' ? 78 : zone.kind === 'outdoor' ? 118 : 106,
+            measuredHeights.get(zone.id) ?? 42 + lines * 19 + flags * 19) };
     };
     const tallest = Math.max(...raw.zones.map(zone => size(zone).height));
     const root = raw.zones.find(zone => zone.id === raw.player_place_id) || raw.zones[0];
@@ -154,11 +155,34 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
         if (label) { const b = document.createElement('strong'); b.textContent = label + ': '; p.append(b); }
         p.append(document.createTextNode(value)); target.append(p);
     };
+    function placeButton(node) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'bb-topology-place';
+        button.dataset.placeId = node.id; button.dataset.kind = node.kind;
+        button.setAttribute('aria-pressed', String(node.id === selected)); button.title = node.name;
+        const kind = document.createElement('small'); kind.textContent = tr(...kinds[node.kind]);
+        const name = document.createElement('span'); name.textContent = node.name; button.append(kind, name);
+        if (node.threat_level !== 'safe') {
+            const threat = document.createElement('small'); threat.className = `bb-topology-threat is-${node.threat_level}`;
+            threat.textContent = node.threat_level === 'danger' ? tr('Опасность', 'Danger') : tr('Напряжение', 'Tension'); button.append(threat);
+        }
+        if (node.id === raw.player_place_id) { const current = document.createElement('small'); current.className = 'bb-topology-current'; current.textContent = tr('● Вы здесь', '● You are here'); button.append(current); }
+        if (node.uncertain) { const uncertain = document.createElement('small'); uncertain.textContent = tr('Не подтверждено', 'Unconfirmed'); button.append(uncertain); }
+        return button;
+    }
     function draw() {
         if (!field.isConnected || !field.clientWidth) return;
         const focusedId = places.querySelector(':focus')?.dataset.placeId;
         const focusedDetail = detail.contains(document.activeElement) ? document.activeElement.dataset.focusKey : null;
-        const width = field.clientWidth, layout = layoutMapPlaces(raw, width);
+        const width = field.clientWidth;
+        const probes = layoutMapPlaces(raw, width).nodes.map(node => {
+            const button = placeButton(node);
+            button.style.cssText = `left:${node.x}px;top:${node.y}px;width:${node.width}px;height:auto;visibility:hidden`;
+            return button;
+        });
+        // Measure actual wrapping and every status before positioning shapes and passages.
+        places.replaceChildren(...probes);
+        const measuredHeights = new Map(probes.map(button => [button.dataset.placeId, button.offsetHeight + 1]));
+        const layout = layoutMapPlaces(raw, width, measuredHeights);
         field.style.height = `${layout.height}px`; svg.setAttribute('viewBox', `0 0 ${width} ${layout.height}`);
         svg.replaceChildren(); places.replaceChildren();
         const byId = new Map(layout.nodes.map(node => [node.id, node]));
@@ -196,18 +220,8 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
             if (node.kind === 'outdoor') make('path', { class: cls,
                 d: `M ${x + 12} ${y + 22} Q ${x + node.width * .34} ${y - 5} ${x + node.width * .7} ${y + 7} Q ${x + node.width + 6} ${y + 16} ${x + node.width - 4} ${node.y} Q ${x + node.width + 2} ${y + node.height + 7} ${node.x} ${y + node.height - 4} Q ${x - 5} ${y + node.height + 7} ${x + 2} ${node.y} Z` });
             else make('rect', { x, y, width: node.width, height: node.height, rx: node.kind === 'passage' ? 3 : 9, class: cls });
-            const button = document.createElement('button'); button.type = 'button'; button.className = 'bb-topology-place';
-            button.dataset.placeId = node.id; button.setAttribute('aria-pressed', String(node.id === selected));
-            button.title = node.name;
+            const button = placeButton(node);
             button.style.cssText = `left:${node.x}px;top:${node.y}px;width:${node.width}px;height:${node.height}px`;
-            const kind = document.createElement('small'); kind.textContent = tr(...kinds[node.kind]);
-            const name = document.createElement('span'); name.textContent = node.name; button.append(kind, name);
-            if (node.threat_level !== 'safe') {
-                const threat = document.createElement('small'); threat.className = `bb-topology-threat is-${node.threat_level}`;
-                threat.textContent = node.threat_level === 'danger' ? tr('Опасность', 'Danger') : tr('Напряжение', 'Tension'); button.append(threat);
-            }
-            if (node.id === raw.player_place_id) { const current = document.createElement('small'); current.className = 'bb-topology-current'; current.textContent = tr('● Вы здесь', '● You are here'); button.append(current); }
-            if (node.uncertain) { const uncertain = document.createElement('small'); uncertain.textContent = tr('Не подтверждено', 'Unconfirmed'); button.append(uncertain); }
             const highlight = active => {
                 const hoverRoute = active ? getMapRoute(raw, node.id) : null;
                 for (const line of svg.querySelectorAll('.is-line')) {

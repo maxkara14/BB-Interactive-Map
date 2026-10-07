@@ -4,7 +4,7 @@
 
 A **SillyTavern** extension that turns story events into a map of places and passages. Track your position, characters, objects and scene conditions, and give the model spatial memory of the current chat.
 
-**Version 2.0**
+**Version 2.0.3**
 
 ![BB Interactive Map — actual interface overview](docs/images/overview.en.png)
 
@@ -17,6 +17,7 @@ A **SillyTavern** extension that turns story events into a map of places and pas
 | **Places and passages** | Rooms, outdoors, areas and corridors form a schematic with doors, paths, stairs and openings |
 | **Floating mini-map** | Shows your position and nearby places, opens the full map and remembers widget position |
 | **Scene memory** | Saves a separate map for each chat and supplies it to the model |
+| **Location archive** | Stores snapshots within each chat: view, rename, delete or return with a story-based refresh |
 | **Updates after character replies** | Prepares a map after a reply or reroll, with review or automatic saving |
 | **Review, edit and rollback** | Shows changes, lets you correct the map and restores the previous snapshot |
 | **Mention cards** | Highlights map names in messages; clicking opens their description and location |
@@ -60,9 +61,27 @@ Enable **Prepare update after reply**. A completed character reply or reroll tri
 
 - By default, the proposal waits for review and saving.
 - **Save updates automatically** enables updates after replies and applies suitable updates immediately, including an existing proposal, keeping the previous map for rollback. The first map can be created automatically after a character reply without a prior manual save.
-- Uncertain position, places, passages, possession or effects may require review. An unresolved proposal pauses further automatic requests.
+- Uncertain position, places, passages, possession or effects may require review. An unresolved proposal pauses repeat requests for the same reply. A new or edited reply replaces the stale proposal with a fresh scan.
+- Manual map scans always open a preview for confirmation, even with automatic saving enabled.
+- In the full map, **Needs review** before the update button lets you confirm an individual place or passage availability. Clicks change only the preview; apply the result with **Save map**. Confirming passage availability allows routing through it. Archive snapshots cannot be edited.
+- When automatic saving pauses, the widget and settings show why; identical popup warnings do not repeat on subsequent replies. New uncertain places or passages need manual review. **Save with uncertainty** accepts the snapshot while retaining dashed lines and uncertainty markers. Once accepted, unchanged uncertainties no longer pause automatic saving; unknown player position and archive returns still require review.
 
 Cancelled responses are discarded. Changing chats prevents a late result from replacing another chat's map. Updates use a separate request and do not create a character reply.
+
+## Location archive
+
+Ordinary scans and renaming update the active entry by ID. A distinct new scene needs narrative evidence; unclear boundaries offer **Update current location** or **This is a new location**. A model `null` alone does not create an entry.
+
+**Clear memory text** removes the active map and its context while keeping the archive. Use **Delete from archive** on an individual entry and confirm deletion. The active entry is protected: switch maps or clear active memory first. Deleting a snapshot leaves chat messages and other entries unchanged.
+
+Settings include a **Location archive** section. Accepted maps become separate snapshots in the current chat; saving the same location again updates its snapshot. One-step map rollback stays separate. Use **Add current map to archive** for an old map; simply opening an old chat does not rewrite its data.
+
+- **View** opens a historical snapshot without changing memory, editing or preparing travel. You can rename entries in the list.
+- During scans, the model receives a list of known locations. Recognizing a return to another saved location produces a **Return to the map** proposal, even with automatic saving enabled. Recognition depends on the model; choose an entry manually when ambiguous.
+- **Return and refresh** makes one additional request using the old layout and current narrative. Old characters, objects, threats and effects are not automatically restored; player position and passage states are checked again. Game mode preserves established carried possessions from current memory. Review and save the result.
+- **This is a new location** keeps similar names as separate entries: choose it, then use the regular save button. Viewing a map or intending to travel there alone never switches the active location.
+
+Only the active map is sent to story context. The archive stores each location's latest accepted snapshot, not its complete history. Clearing current memory leaves the archive available for returns.
 
 ## Classic and Game modes
 

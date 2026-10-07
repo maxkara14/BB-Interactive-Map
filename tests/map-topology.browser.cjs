@@ -110,9 +110,11 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
                 connections: sourceGraph.connections.map((edge, i) => i ? edge : { ...edge, status: 'blocked', evidence: 'Дверь закрыли.' }) }, original);
             showRadarModal(candidate, false);
         });
-        assert.match(await page.locator('.bb-map-review').last().innerText(), /Проход · Дверь/);
-        assert.match(await page.locator('.bb-map-review').last().innerText(), /Заблокирован/);
-        assert.match(await page.locator('.bb-map-review').last().innerText(), /Перемещение.*Боккэн/s);
+        const changes = page.locator('.bb-map-review:not(.bb-map-quick-review)').last();
+        assert.match(await changes.innerText(), /Проход · Дверь/);
+        assert.match(await changes.innerText(), /Заблокирован/);
+        assert.match(await changes.innerText(), /Перемещение.*Боккэн/s);
+        assert.equal(await page.locator('.bb-map-quick-review').count(), 1);
         await page.locator('#bb-map-save-btn').click();
         assert.equal(await page.evaluate(() => saves), 1);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.previous.raw === original), true);

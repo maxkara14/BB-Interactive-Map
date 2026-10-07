@@ -141,6 +141,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
         assert.equal(await page.evaluate(() => autoCandidate.unlocated_objects[0].holder), 'Player');
         await page.evaluate(() => showRadarModal(autoCandidate, false, context, autoCandidateBase));
         assert.match(await page.locator('.bb-map-review').last().innerText(), /Legacy memory cleanup/);
+        await page.getByRole('button', { name: 'THIS IS A NEW LOCATION', exact: true }).click();
         await page.locator('#bb-map-save-btn').click();
         assert.equal(await page.evaluate(() => writes), 5);
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.previous.raw === legacy.raw), true);

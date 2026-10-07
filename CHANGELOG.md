@@ -4,8 +4,27 @@
 
 ## Русский
 
-### Исправления — 7 октября 2026 (без изменения версии)
+### 2.0.3 — 8 октября 2026
 
+- На телефоне кнопка «Отменить правки» в редакторе занимает полную ширину, как «Проверить правки».
+- Обычные обновления сохраняют ID текущей архивной записи при переименовании сцены и `null` от модели. Отдельная новая сцена требует основания из сюжета; неясная граница предлагает выбор текущей или новой записи. Заголовок-пример `Location` не заменяет название продолжающейся сцены.
+- Добавлено удаление отдельных неактивных снимков из архива с подтверждением. Очистка текста памяти сохраняет архив; для удаления текущего снимка сначала переключите карту или очистите активную память.
+- Под карточкой места добавлен компактный блок «Нужно проверить» перед обновлением карты: можно подтвердить отдельное место или доступность прохода без большого редактора. Действия меняют только предпросмотр до сохранения; архивные снимки остаются только для просмотра. Кнопки и длинные названия адаптированы для телефона.
+- Кнопка «+ Проход» в редакторе занимает ширину секции, как соседние кнопки добавления, и имеет высоту не менее 44 пикселей для удобного нажатия на телефоне.
+
+#### Архив локаций
+
+- Отдельные снимки локаций внутри чата: просмотр без переключения активной памяти, названия записей и ручной возврат с обновлением по текущему сюжету.
+- Распознавание возвращения к сохранённой локации при сканировании. Предложение требует подтверждения даже при автосохранении; похожую локацию можно сохранить отдельной записью.
+- Возврат использует исторический план без автоматического восстановления прежних персонажей, объектов и эффектов. Проверяются текущее положение, проходы и актуальность сцены; сохраняются переносимые вещи игрока в игровом режиме.
+- Совместимое добавление архива без перезаписи старых чатов при чтении; откат к предыдущей карте остаётся отдельным действием. Архив сохраняется при очистке активной памяти.
+
+#### Автообновление и отображение карты
+
+- Приостановка автосохранения показывает причину в виджете и настройках и однократное предупреждение для новых сомнений. Ручное сохранение с неопределённостью принимает снимок без подтверждения сомнительных фактов: неизменившиеся места и проходы больше не требуют повторной проверки. Новые сомнения, неизвестное положение и возврат в архив остаются на проверке.
+- Нерассмотренное предложение карты больше не блокирует автообновление после нового ответа или перегенерации, в том числе при смене локации. Повторные события той же реплики не расходуют новый запрос; ручной запуск сохраняет предпросмотр с подтверждением.
+- Ответы ИИ с типами мест `roof` и `interior` преобразуются в `outdoor` и `room`. Для других неподдерживаемых типов ошибка указывает поле и допустимые значения; проверка сохранённых карт остаётся строгой.
+- Исправлено обрезание длинных названий мест на полной карте. Размер зон учитывает фактический перенос текста и все подписи состояний; рамки и проходы перестраиваются под размер содержимого.
 - Включение автосохранения применяет уже готовое безопасное обновление, не удаляя его и не расходуя новый запрос. Неоднозначные изменения остаются на проверке; устаревшие результаты не сохраняются.
 - Автосохранение включает подготовку обновлений после реплик. Автообновление работает и без предварительно сохранённой первой карты; ручные сканы сохраняют предпросмотр.
 
@@ -62,8 +81,27 @@
 
 ## English
 
-### Fixes — October 7, 2026 (no version change)
+### 2.0.3 — October 8, 2026
 
+- On mobile, the editor's “Cancel edits” button spans the full width like “Preview edits”.
+- Ordinary updates keep the active archive entry ID across scene renaming and model `null` IDs. A distinct new scene needs narrative evidence; unclear boundaries offer a current/new entry choice. The example title `Location` no longer replaces a continuing scene title.
+- Individual inactive snapshots can be deleted with confirmation. Clearing memory text keeps the archive; switch maps or clear active memory before deleting the current snapshot.
+- A compact “Needs review” block below the place card and before map updates lets users confirm a place or passage availability without the full editor. Actions change only the preview until saved; archive snapshots remain read-only. Buttons and long names adapt to phone screens.
+- The editor's “+ Passage” button spans its section like neighboring add buttons and is at least 44 pixels tall for comfortable touch interaction.
+
+#### Location archive
+
+- Separate location snapshots per chat: viewing without switching active memory, editable labels, and manual return with a refresh from the current narrative.
+- Scan-time recognition of a return to a saved location. Proposals require confirmation even with automatic saving; similar locations can be kept as separate entries.
+- Returns use historical layouts without automatically restoring former occupants, objects or effects. Current position, passages and scene freshness are checked; Game mode preserves established carried possessions.
+- Backward-compatible archive creation without rewriting old chats on read; one-step map rollback remains separate. Clearing active memory preserves the archive.
+
+#### Automatic updates and map rendering
+
+- Paused automatic saving shows its reason in the widget and settings, with a one-time warning for new uncertainties. Saving with uncertainty accepts the snapshot without confirming doubtful facts: unchanged places and passages no longer need repeated review. New uncertainties, unknown position and archive returns still need review.
+- An unresolved map proposal no longer blocks updates after a new reply or reroll, including location changes. Duplicate events for the same reply do not make another request; manual scans retain preview and confirmation.
+- Generated place kinds `roof` and `interior` are converted to `outdoor` and `room`. Other unsupported kinds report the field and allowed values; saved-map validation remains strict.
+- Fixed clipped long place names on the full map. Place sizing accounts for actual text wrapping and all status labels; shapes and passages adapt to the content size.
 - Enabling automatic saving applies an existing safe update without discarding it or making another request. Ambiguous changes stay available for review; stale results are not saved.
 - Automatic saving enables updates after replies. Automatic updates also work before the first map has been saved; manual scans retain their preview.
 

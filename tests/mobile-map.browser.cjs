@@ -121,7 +121,7 @@ const strip = source => source.replace(/^import .*;\r?\n/gm, '').replace(/^expor
             await page.locator('#bb-map-overlay [data-map-scan]').click();
             await page.waitForFunction(() => typeof releaseScan === 'function');
             assert.equal(await page.locator('#bb-map-overlay [data-map-cancel]').isVisible(), true);
-            if (source === 'custom') await page.locator('#bb-map-settings-wrapper [data-map-cancel]').evaluate(button => button.click());
+            if (source === 'custom') await page.locator('#bb-map-settings-wrapper details[data-section="map"] [data-map-cancel]').evaluate(button => button.click());
             else await page.locator('#bb-map-overlay [data-map-cancel]').click();
             assert.equal(await page.evaluate(() => activeMapScan.controller.signal.aborted), true);
             if (source !== 'main') assert.equal(await page.evaluate(() => requestSignal.aborted), true);

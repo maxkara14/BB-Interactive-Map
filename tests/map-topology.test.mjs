@@ -19,6 +19,28 @@ test('automatic topology saving pauses for unknown position, uncertain places or
     assert.equal(requiresTopologyReview(null, normalizeMapData({ schematic_name: 'House', zones: [{ position: 'center', name: 'Hall' }] })), false);
 });
 
+test('accepting uncertain topology permits unchanged updates without claiming certainty or a route', () => {
+    const accepted = normalizeGraphMapData(input({ zones: input().zones.map(zone => ({ ...zone, uncertain: true })),
+        connections: input().connections.map(edge => ({ ...edge, status: 'uncertain' })) }));
+    const snapshot = JSON.stringify(accepted);
+    const next = normalizeGraphMapData({ ...accepted, atmosphere: 'Rain',
+        zones: accepted.zones.map(zone => ({ ...zone, summary: 'A newer description', characters: [{ name: 'Visitor' }] })) }, accepted);
+    assert.equal(requiresTopologyReview(accepted, next), false);
+    assert.equal(next.zones.every(zone => zone.uncertain), true);
+    assert.equal(next.connections.every(edge => edge.status === 'uncertain'), true);
+    assert.equal(getMapRoute(next, next.zones[1].id), null);
+    assert.equal(JSON.stringify(accepted), snapshot);
+    assert.equal(requiresTopologyReview(accepted, { ...next, player_place_id: null }), true);
+    assert.equal(requiresTopologyReview(accepted, { ...next, schematic_name: 'Another house' }), true);
+    assert.equal(requiresTopologyReview(accepted, { ...next, zones: next.zones.map((zone, i) => i ? zone : { ...zone, kind: 'outdoor' }) }), true);
+    for (const field of ['name', 'kind', 'direction', 'to']) {
+        const values = { name: 'New opening', kind: 'opening', direction: 'forward', to: next.zones[2].id };
+        assert.equal(requiresTopologyReview(accepted, { ...next, connections: next.connections.map((edge, i) => i ? edge : { ...edge, [field]: values[field] }) }), true, field);
+    }
+    const confirmed = { ...accepted, connections: accepted.connections.map(edge => ({ ...edge, status: 'confirmed' })) };
+    assert.equal(requiresTopologyReview(confirmed, next), true, 'new uncertainty on a formerly confirmed passage');
+});
+
 test('graph normalization remaps every reference, retains isolated places and does not mutate input', () => {
     const source = input({ zones: [...input().zones, place('shed', 'Shed')] });
     const snapshot = JSON.stringify(source);

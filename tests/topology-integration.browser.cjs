@@ -48,6 +48,17 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             assert.match(call.prompt, /scope "surroundings"/); assert.match(call.prompt, /player_place_id/);
             assert.doesNotMatch(call.prompt, /fill the entire 3x3|Invent logical surrounding/);
         }
+        await page.evaluate(async () => {
+            settings.generationSource = 'main';
+            response.zones[2].kind = '<img src=x onerror=alert(1)>';
+            await triggerMapScan(document.getElementById('scan'), 'surroundings');
+            response.zones[2].kind = 'outdoor';
+        });
+        assert.match(await page.evaluate(() => notices.at(-1)), /zones\[2\]\.kind.*room, outdoor, passage, area, unknown/);
+        assert.doesNotMatch(await page.evaluate(() => notices.at(-1)), /<img/);
+        assert.equal(await page.evaluate(() => chat_metadata.bb_map_data === oldGrid && saves === 0), true);
+        assert.equal(await page.locator('.bb-map-graph-modal').count(), 0);
+        assert.equal(await page.locator('#scan').isEnabled(), true);
         await page.evaluate(async () => { settings.generationSource = 'main'; await triggerMapScan(document.getElementById('scan'), 'surroundings'); });
         assert.equal(await page.locator('.bb-topology-place').count(), 3);
         assert.equal(await page.evaluate(() => saves), 0);
@@ -80,6 +91,21 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await added.locator('[name="name"]').fill('Лазарет');
         await added.locator('[name="kind"]').selectOption('room');
         await added.locator('[name="uncertain"]').selectOption('false');
+        for (const width of [1440, 768, 390, 320]) {
+            await page.setViewportSize({ width, height: 1000 });
+            const addPassage = page.getByRole('button', { name: '+ Проход', exact: true });
+            await addPassage.scrollIntoViewIfNeeded();
+            assert.ok(await addPassage.evaluate(button => button.offsetWidth >= button.parentElement.clientWidth - 2), 'Add passage spans its section');
+            assert.ok(await addPassage.evaluate(button => button.offsetHeight >= 44), 'Add passage has a comfortable touch target');
+            if (width <= 600) {
+                const sizes = await page.locator('.bb-map-editor .bb-map-controls').evaluate(controls =>
+                    [...controls.querySelectorAll('button')].map(button => ({ width: button.offsetWidth, height: button.offsetHeight })));
+                assert.equal(sizes[0].width, sizes[1].width, 'Mobile preview and cancel edits have equal widths');
+                assert.equal(sizes[0].height, sizes[1].height, 'Mobile preview and cancel edits have equal heights');
+            }
+            assert.ok(await page.locator('.bb-map-modal').evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
         await page.getByRole('button', { name: '+ Проход', exact: true }).click();
         const edge = page.locator('[data-connection]').last();
         await edge.locator('[name="name"]').fill('Дверь лазарета');
@@ -108,7 +134,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
             await page.waitForFunction(() => autoStatus === 'ready');
             const before = await page.evaluate(() => saves);
             await page.locator('.bb-map-widget-review').click();
-            assert.match(await page.locator('.bb-map-change-warning').first().innerText(), /Положение или проходы/);
+            assert.match(await page.locator('.bb-map-change-warning').first().innerText(), /неподтверждённых проходов/);
             if (mode === 'game') {
                 await page.getByRole('button', { name: 'Сад', exact: false }).filter({ has: page.locator('small', { hasText: 'Открытое место' }) }).click();
                 assert.equal(await page.locator('#bb-map-travel button').count(), 0);

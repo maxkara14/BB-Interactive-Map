@@ -1,6 +1,89 @@
 export const MAP_DATA_VERSION = 2;
 export const GRAPH_MAP_DATA_VERSION = 3;
 
+// Location snapshots are separate from the active map and its one-step undo.
+// Reading old chats never creates or rewrites an archive.
+export function readLocationArchive(metadata) {
+    const archive = metadata?.bb_map_archive;
+    if (!archive) return { version: 1, activeId: null, locations: [] };
+    if (archive.version !== 1 || !Array.isArray(archive.locations)) throw new Error('invalid_archive');
+    const ids = new Set();
+    for (const entry of archive.locations) {
+        if (!entry || !/^bbl-\d+$/.test(entry.id) || ids.has(entry.id)
+            || typeof entry.name !== 'string' || !entry.name.trim() || entry.name.length > 1500) throw new Error('invalid_archive');
+        ids.add(entry.id);
+        readMapState(entry.snapshot);
+    }
+    if (archive.activeId != null && !ids.has(archive.activeId)) throw new Error('invalid_archive');
+    return archive;
+}
+
+export function matchArchivedLocation(archive, id, sceneName) {
+    if (id != null) return archive.locations.find(entry => entry.id === id) || null;
+    const name = holderKey(sceneName);
+    if (!name) return null;
+    const matches = archive.locations.filter(entry => holderKey(entry.name) === name
+        || holderKey(entry.snapshot.raw.schematic_name) === name);
+    return matches.length === 1 ? matches[0] : null;
+}
+
+export function resolveLocationUpdate(archive, current, response, recentText) {
+    const quoted = value => typeof value === 'string' && !!value.trim() && recentText.includes(value.trim());
+    const sharedPlace = Array.isArray(response.zones) && response.zones.some(zone => zone
+        && (current?.zones || []).some(old => holderKey(old.name) === holderKey(zone.name)));
+    const matched = response.archive_location_id === null || (response.archive_location_id != null && !quoted(response.location_evidence))
+        ? null : matchArchivedLocation(archive, response.archive_location_id, response.schematic_name);
+    if (matched && (matched.id === archive.activeId || response.archive_location_id != null || !current || !sharedPlace)) {
+        return { locationId: matched.id, needsConfirmation: matched.id !== archive.activeId, needsLocationChoice: false,
+            continuesCurrent: !!current && matched.id === archive.activeId };
+    }
+    if (!current) return { locationId: null, needsConfirmation: false, needsLocationChoice: false };
+    const sameTitle = holderKey(current.schematic_name) === holderKey(response.schematic_name);
+    const newScene = response.location_change === 'new' && quoted(response.location_change_evidence);
+    if (newScene && !sharedPlace && !sameTitle) return { locationId: null, needsConfirmation: false, needsLocationChoice: false };
+    const continuation = response.location_change !== 'uncertain' && (response.location_change === 'same' || sharedPlace || sameTitle);
+    return { locationId: archive.activeId, needsConfirmation: false, needsLocationChoice: !continuation, continuesCurrent: continuation };
+}
+
+export function deleteArchivedLocation(archive, id) {
+    readLocationArchive({ bb_map_archive: archive });
+    if (id === archive.activeId || !archive.locations.some(entry => entry.id === id)) throw new Error('invalid_archive');
+    return { ...archive, locations: archive.locations.filter(entry => entry.id !== id) };
+}
+
+export function recordArchivedMap(archive, saved, id = null, now = Date.now()) {
+    readMapState(saved);
+    const existing = id == null ? null : archive.locations.find(entry => entry.id === id);
+    if (id != null && !existing) throw new Error('invalid_archive');
+    const nextId = existing?.id || `bbl-${Math.max(0, ...archive.locations.map(entry => Number(entry.id.slice(4)))) + 1}`;
+    const entry = { id: nextId, name: existing?.name || saved.raw.schematic_name,
+        updatedAt: now, snapshot: { version: saved.version || 1, raw: structuredClone(saved.raw), context: saved.context || '' } };
+    return { version: 1, activeId: nextId, locations: existing
+        ? archive.locations.map(value => value.id === nextId ? entry : value) : [...archive.locations, entry] };
+}
+
+export function renameArchivedLocation(archive, id, name) {
+    const label = requiredText(name);
+    if (label.length > 1500 || !archive.locations.some(entry => entry.id === id)) throw new Error('invalid_archive');
+    return { ...archive, locations: archive.locations.map(entry => entry.id === id ? { ...entry, name: label } : entry) };
+}
+
+export function archivedLocationTopology(snapshot) {
+    const raw = readMapState(snapshot);
+    return { ...raw, atmosphere: '', player_place_id: null,
+        zones: raw.zones.map(zone => ({ ...zone, summary: '', threat_level: 'safe', threat_reason: '', poi: [], characters: [] })),
+        ...(raw.layout === 'graph' ? { connections: raw.connections.map(edge => ({ ...edge, status: 'uncertain', evidence: '' })) } : {}),
+        unlocated_objects: [], effects: [] };
+}
+
+export function locationNormalizationMemory(topology, current) {
+    if (!current) return topology;
+    return { ...topology, zones: topology.zones.map((zone, index) => ({ ...zone,
+        poi: index === 0 ? (current.zones || []).flatMap(place => place.poi || []) : [],
+        characters: index === 0 ? (current.zones || []).flatMap(place => place.characters || []) : [] })),
+        unlocated_objects: current.unlocated_objects || [], effects: current.effects || [] };
+}
+
 export function isSameChat(initial, current) {
     return initial?.chatId != null
         && initial.chatId === current?.chatId
@@ -180,10 +263,26 @@ export function buildMapEffectsContext(raw, playerName = '') {
     return `\n[Temporary scene effects: ${effects.map(effect => `${effect.name}; target (${effect.scope}): ${effect.target}; description: ${effect.description}; source: ${effect.source}; ends when: ${effect.expires_when}`).join(' | ')}. These are narrative circumstances, not automatic damage, penalties, rolls, or permission to act for the player.]`;
 }
 
+export function getTopologyReviewIssues(previous, next) {
+    if (next?.layout !== 'graph') return [];
+    const scene = holderKey(next.schematic_name);
+    const sameScene = previous?.layout === 'graph' && holderKey(previous.schematic_name) === scene;
+    // Accept the saved physical layout, not inferred certainty. Narrative wording and occupants may change.
+    const placeKey = zone => JSON.stringify([scene, 'place', zone.id, zone.name, zone.kind]);
+    const edgeKey = edge => JSON.stringify([scene, 'connection', edge.id, edge.from, edge.to, edge.name, edge.kind, edge.direction || 'both']);
+    const acceptedPlaces = new Set(sameScene ? previous.zones.filter(zone => zone.uncertain).map(placeKey) : []);
+    const acceptedEdges = new Set(sameScene ? previous.connections.filter(edge => edge.status === 'uncertain').map(edgeKey) : []);
+    return [
+        ...(!next.player_place_id ? [{ type: 'position', key: JSON.stringify([scene, 'position']) }] : []),
+        ...next.zones.filter(zone => zone.uncertain && !acceptedPlaces.has(placeKey(zone)))
+            .map(zone => ({ type: 'place', key: placeKey(zone) })),
+        ...next.connections.filter(edge => edge.status === 'uncertain' && !acceptedEdges.has(edgeKey(edge)))
+            .map(edge => ({ type: 'connection', key: edgeKey(edge) })),
+    ];
+}
+
 export function requiresTopologyReview(previous, next) {
-    if (next?.layout !== 'graph') return false;
-    return !next.player_place_id || next.zones.some(zone => zone.uncertain)
-        || next.connections.some(edge => edge.status === 'uncertain');
+    return getTopologyReviewIssues(previous, next).length > 0;
 }
 
 export function requiresObjectReview(previous, next, playerName = '') {
