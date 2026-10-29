@@ -2,15 +2,26 @@
 
 import { setExtensionPrompt, chat_metadata, isChatSaving, saveChatConditional, saveChatDebounced, saveSettingsDebounced, extension_prompt_roles, extension_prompt_types, generateQuietPrompt } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
+import { getTokenCountAsync } from '../../../tokenizers.js';
 import { normalizeGraphMapData, readMapState, getMapRoute, requiresTopologyReview, normalizeMapData, poiName, createSavedMap, restorePreviousMap, isSameChat, getMapChanges, getMapMode, getMapTransition, createTravelDraft, getMapObjects, reconcileMapObjects, requiresObjectReview, activeMapObjects, hasLegacyObjectMemory, buildMapContextString, reconcileMapEffects, getMapEffectChanges, requiresEffectReview, buildMapEffectsContext, isMapEffectApplicable } from './map-state.js';
 import { createChatMapLinks } from './map-links.js';
 import { createMapTopologyView, layoutMiniMap, layoutMapPassage, getMapVisualChanges } from './map-topology-view.js';
 import { readLocationArchive, matchArchivedLocation, recordArchivedMap, renameArchivedLocation, archivedLocationTopology, locationNormalizationMemory } from './map-state.js';
 import { getTopologyReviewIssues } from './map-state.js';
 import { resolveLocationUpdate, deleteArchivedLocation } from './map-state.js';
+import { normalizeMentionAliases, MAX_MENTION_ALIASES, MAX_MENTION_ALIAS_LENGTH } from './map-state.js';
 
 const MODULE_NAME = "BB-Interactive-Map";
 const MAP_MAX_TOKENS = 10000;
+const AUTO_WAIT_TIMEOUT = 120000;
+const MAP_COLORS = Object.freeze({ accent: '#79d7d3', surface: '#11191b', text: '#e6eeee', safe: '#72ab91', tension: '#d8b46a', danger: '#d77d7d',
+    'mention-character': '#83d8d3', 'mention-object': '#e8c78e', 'mention-zone': '#a5c9ad' });
+const TRACKED_FIELDS = ['atmosphere', 'characters', 'objects', 'mood', 'attitude', 'thought'];
+
+function boundedInteger(value, fallback, min, max) {
+    const number = Number(value);
+    return Number.isFinite(number) && number >= min ? Math.min(max, Math.floor(number)) : fallback;
+}
 
 if (!extension_settings[MODULE_NAME]) {
     extension_settings[MODULE_NAME] = {
@@ -34,6 +45,14 @@ settings.widgetCollapsed ??= true;
 settings.autoUpdate ??= false;
 settings.autoApply ??= false;
 settings.highlightMentions ??= false;
+settings.historyMessages = boundedInteger(settings.historyMessages, 3, 1, 100);
+settings.historyTokenLimit = boundedInteger(settings.historyTokenLimit, 0, 0, 100000);
+settings.autoUpdateInterval = boundedInteger(settings.autoUpdateInterval, 1, 1, 100);
+settings.updateOnContinue ??= true;
+settings.updateOnRegenerate ??= true;
+settings.trackedFields = Object.fromEntries(TRACKED_FIELDS.map(key => [key, settings.trackedFields?.[key] !== false]));
+settings.colors = Object.fromEntries(Object.entries(MAP_COLORS).map(([key, fallback]) =>
+    [key, /^#[\da-f]{6}$/i.test(settings.colors?.[key]) ? settings.colors[key] : fallback]));
 if (!['simple', 'enhance'].includes(settings.travelWriting)) settings.travelWriting = 'simple';
 if (settings.scanScale === 'local') settings.scanScale = 'scene';
 if (settings.scanScale === 'global') settings.scanScale = 'surroundings';
@@ -53,14 +72,117 @@ let autoCandidateReply = null;
 let autoCandidateText = null;
 let autoCandidateMode = null;
 let autoStatus = 'idle';
+let autoWaitSince = null;
+let autoWaitReason = '';
+let autoScheduleChat = null;
+let autoReplyCount = 0;
+let handledReplies = new WeakMap();
 let chatMapLinks = null;
 let mapTravelController = null;
 let mapTopologyView = null;
 let widgetMapSnapshot = null;
+let mentionMapSnapshot = null;
 const candidateLocations = new WeakMap();
 
 function mapSceneText(chat) {
-    return (chat.chat || []).slice(-3).map(message => `${message.name}: ${message.mes}`).join('\n\n');
+    return sceneMessages(chat).join('\n\n');
+}
+
+function sceneMessages(chat) {
+    return (chat.chat || []).slice(-settings.historyMessages).map(message => `${message.name || (message.is_user ? chat.name1 : 'Character') || 'User'}: ${message.mes || ''}`);
+}
+
+async function scanHistoryText(chat, signal) {
+    const messages = sceneMessages(chat), limit = settings.historyTokenLimit;
+    if (!limit) return messages.join('\n\n');
+    const count = async text => {
+        if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+        const tokens = await getTokenCountAsync(text, 0);
+        if (!Number.isFinite(tokens) || (text && tokens <= 0)) throw new Error(tr('Не удалось подсчитать токены истории.', 'Could not count history tokens.'));
+        return tokens;
+    };
+    let text = messages.join('\n\n');
+    if (await count(text) <= limit) return text;
+    const latest = messages.at(-1) || '';
+    if (messages.length > 1 && await count(latest) <= limit) {
+        let low = 1, high = messages.length - 1, selected = latest;
+        while (low <= high) {
+            const size = Math.floor((low + high) / 2);
+            const tail = messages.slice(-size).join('\n\n');
+            if (await count(tail) <= limit) { selected = tail; low = size + 1; }
+            else high = size - 1;
+        }
+        return selected;
+    }
+    // Retain the newest part of a single oversized message, without splitting Unicode characters.
+    const characters = Array.from(latest);
+    let low = 1, high = characters.length - 1, selected = '';
+    while (low <= high) {
+        const size = Math.floor((low + high) / 2);
+        text = characters.slice(-size).join('');
+        if (await count(text) <= limit) { selected = text; low = size + 1; }
+        else high = size - 1;
+    }
+    if (selected) return selected;
+    throw new Error(tr('Лимит истории слишком мал. Увеличьте его.', 'The history limit is too small. Increase it.'));
+}
+
+function trackedMapData(raw) {
+    if (!raw || TRACKED_FIELDS.every(key => settings.trackedFields[key])) return raw;
+    const fields = settings.trackedFields;
+    const filtered = { ...raw, atmosphere: fields.atmosphere ? raw.atmosphere : '',
+        zones: raw.zones.map(zone => ({ ...zone,
+            poi: fields.objects ? zone.poi : [],
+            characters: fields.characters ? (zone.characters || []).map(character => ({ ...character,
+                mood: fields.mood ? character.mood : '', attitude: fields.attitude ? character.attitude : '',
+                thought: fields.thought ? character.thought : '',
+            })) : [],
+        })), unlocated_objects: fields.objects ? raw.unlocated_objects : [],
+    };
+    if (candidateLocations.has(raw)) candidateLocations.set(filtered, candidateLocations.get(raw));
+    return filtered;
+}
+
+function getMentionMapData() {
+    const raw = getMapDataForCurrentChat()?.raw;
+    const fields = JSON.stringify(settings.trackedFields);
+    if (!mentionMapSnapshot || mentionMapSnapshot.raw !== raw || mentionMapSnapshot.fields !== fields) {
+        mentionMapSnapshot = { raw, fields, value: trackedMapData(raw) };
+    }
+    return mentionMapSnapshot.value;
+}
+
+function mapMentionAliasMemory(raw) {
+    const entries = [];
+    const add = (type, entry, placeId) => {
+        if (entry?.mention_aliases !== undefined) entries.push({ type, id: entry.id, name: entry.name, place_id: placeId,
+            mention_aliases: normalizeMentionAliases(entry.mention_aliases, entry.name) });
+    };
+    for (const zone of raw?.zones || []) {
+        add('place', zone);
+        for (const character of zone.characters || []) add('character', character, zone.id || zone.position);
+        for (const object of zone.poi || []) add('object', object, zone.id || zone.position);
+    }
+    for (const object of raw?.unlocated_objects || []) if (object.item_state === 'held') add('object', object);
+    return entries;
+}
+
+function mentionAliasesError() {
+    return tr('Варианты упоминания: не более 16 строк по 2–120 символов, без HTML и управляющих символов.',
+        'Mention variants: up to 16 strings of 2–120 characters, without HTML or control characters.');
+}
+
+function applyMapColors() {
+    for (const [key, fallback] of Object.entries(MAP_COLORS)) {
+        const value = settings.colors[key];
+        if (value === fallback) document.documentElement.style.removeProperty(`--bb-map-${key}`);
+        else document.documentElement.style.setProperty(`--bb-map-${key}`, value);
+    }
+    for (const [key, accent] of [['place', 8], ['place-current', 18]]) {
+        if (settings.colors.surface === MAP_COLORS.surface) document.documentElement.style.removeProperty(`--bb-map-${key}`);
+        else document.documentElement.style.setProperty(`--bb-map-${key}`,
+            `color-mix(in srgb, var(--bb-map-surface) ${100 - accent}%, var(--bb-map-accent, #79d7d3) ${accent}%)`);
+    }
 }
 
 const notifiedMapReviews = new WeakMap();
@@ -125,6 +247,14 @@ Use layout "graph" and scope "scene" or "surroundings". Include 1–24 places an
 Each place needs a unique ASCII id, name, kind (room, outdoor, passage, area, unknown), summary,
 threat_level (safe, tension, danger), threat_reason, uncertain (boolean), poi and characters arrays.
 Objects have name and description. Characters have name, description, mood, attitude and thought.
+For each new place, object (including carried objects), or character, add mention_aliases: an array of up to 16
+short literal ways to mention that same entity, each 2–120 characters, in the narrative language.
+Include unambiguous short names and useful grammatical forms, especially forms actually used in recent chat.
+For example, an object named "Раздвижные сёдзи" can have ["сёдзи", "раздвижными сёдзи"].
+These are matching labels, never new facts: do not invent objects, synonyms for different things, pronouns,
+generic words like "person" or "thing", or markup. Do not duplicate the canonical name.
+Matching metadata in mention_alias_memory belongs to the existing entities: omit mention_aliases for an unchanged
+entity to preserve its saved variants. Supply variants for entities without them or after renaming; [] means full name only.
 Reuse previous place IDs when the place is the same, even if its name changes. Give new places new IDs.
 player_place_id is the established player's place ID, or null if unknown. A requested movement is not a completed move.
 Every connection has from and to place IDs, name, kind (door, path, stairs, opening, passage, unknown),
@@ -137,7 +267,7 @@ Write descriptive values in the recent chat language; keys and enum values stay 
 </rules>
 <format>
 {"layout":"graph","scope":"scene","schematic_name":"Location","atmosphere":"Time | Weather",
- "player_place_id":"hall","zones":[{"id":"hall","name":"Hall","kind":"room","summary":"Visible scene",
+ "player_place_id":"hall","zones":[{"id":"hall","name":"Hall","mention_aliases":["the hall"],"kind":"room","summary":"Visible scene",
  "threat_level":"safe","threat_reason":"Quiet","uncertain":false,"poi":[],"characters":[]}],"connections":[]}
 </format>
 <context>Recent chat: """{{lastMessages}}"""</context>`;
@@ -268,8 +398,9 @@ function getMapDataForCurrentChat() {
 function getMapContextForCurrentChat() {
     const saved = getMapDataForCurrentChat();
     if (saved && ![1, 2, 3].includes(saved.version ?? 1)) return '';
-    const memory = saved?.raw?.unlocated_objects?.some(item => item.item_state !== 'held')
-        ? buildMapContextString(activeMapObjects(saved.raw)) : saved?.context || '';
+    const memory = saved?.raw && (!TRACKED_FIELDS.every(key => settings.trackedFields[key])
+        || saved.raw.unlocated_objects?.some(item => item.item_state !== 'held'))
+        ? buildMapContextString(activeMapObjects(trackedMapData(saved.raw))) : saved?.context || '';
     if (!memory || getMapMode(chat_metadata) !== 'game') return memory;
     const positionRule = saved?.raw?.layout === 'graph' ? 'Use the explicit player position and confirmed passage directions. Unknown connectivity does not establish a blocked path.'
         : "The center zone is the player's last known position.";
@@ -336,6 +467,7 @@ function mapObjectLabel(item) {
 }
 
 function mapObjectsHtml(data, isSavedMap) {
+    if (!settings.trackedFields.objects) return '';
     const objects = getMapObjects(isSavedMap ? activeMapObjects(data) : data);
     return `<details class="bb-map-review bb-map-objects"><summary>${tr('Предметы сцены', 'Scene objects')} <span>${objects.length}</span></summary>
         <p>${tr('Окружение относится к текущей сцене. Между сценами сохраняются вещи игрока и персонажей, которые сейчас присутствуют. Правки — через «Править карту».', 'Surroundings belong to the current scene. Carry items with the player and characters currently present. Use Edit map to correct them.')}</p>
@@ -362,6 +494,8 @@ function mapEffectsHtml(data, isSavedMap, previous) {
 }
 
 function mapChangesHtml(previous, next) {
+    previous = trackedMapData(previous);
+    next = trackedMapData(next);
     const changes = getMapChanges(previous, next);
     const actions = { added: ['Добавлено', 'Added'], removed: ['Убрано с карты', 'Removed from map'],
         moved: ['Перемещение', 'Moved'], changed: ['Изменено', 'Changed'] };
@@ -404,6 +538,7 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         try { data = readMapState(expectedMap); }
         catch { toastr.warning(tr('Сохранённая карта имеет неподдерживаемый формат.', 'The saved map has an unsupported format.'), 'BB Map'); return; }
     }
+    data = trackedMapData(data);
     mapTopologyView?.destroy(); mapTopologyView = null;
     if (data.layout === 'graph') return showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap, previewOnly);
     mapTravelController?.abort();
@@ -455,7 +590,10 @@ function showRadarModal(data, isSavedMap = false, chatForMap = SillyTavern.getCo
         (zone.characters || []).forEach(char => {
             const safeName = escapeHtml(char.name);
             const description = char.description ? `<br/>${escapeHtml(char.description)}` : '';
-            const charInfo = `<b>👤 ${safeName}</b>${description}<br/>🎭 <b>${tr('Состояние:', 'Mood:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.mood || tr('😐 Спокоен', '😐 Calm'))}</span><br/>🤝 <b>${tr('Отношение:', 'Attitude:')}</b> <span style="color:#e2e8f0;">${escapeHtml(char.attitude || tr('Нейтральное', 'Neutral'))}</span><br/><i>💭 "${escapeHtml(char.thought)}"</i>`;
+            const charInfo = `<b>👤 ${safeName}</b>${description}`
+                + (settings.trackedFields.mood ? `<br/>🎭 <b>${tr('Состояние:', 'Mood:')}</b> ${escapeHtml(char.mood || tr('😐 Спокоен', '😐 Calm'))}` : '')
+                + (settings.trackedFields.attitude ? `<br/>🤝 <b>${tr('Отношение:', 'Attitude:')}</b> ${escapeHtml(char.attitude || tr('Нейтральное', 'Neutral'))}` : '')
+                + (settings.trackedFields.thought ? `<br/><i>💭 "${escapeHtml(char.thought)}"</i>` : '');
             const dataIndex = telemetryData.push(charInfo) - 1;
             
             const isUser = userName && safeName.toLowerCase().includes(userName.toLowerCase());
@@ -757,7 +895,7 @@ function showGraphRadarModal(data, isSavedMap, chatForMap, expectedMap, previewO
         ${!isSavedMap ? mapChangesHtml(expectedMap?.raw, data) : ''}
         <div class="bb-map-controls"><button type="button" class="bb-map-btn bb-btn-save" id="bb-map-save-btn" ${isSavedMap ? 'disabled' : ''}>${isSavedMap ? '✅ ' + tr('УЖЕ В ПАМЯТИ', 'ALREADY SAVED') : saveLabel}</button>
         <button type="button" class="bb-map-btn" id="bb-map-edit-btn">${tr('ПРАВИТЬ КАРТУ', 'EDIT MAP')}</button><button type="button" class="bb-map-btn" id="bb-map-back-btn">${tr('ЗАКРЫТЬ КАРТУ', 'CLOSE MAP')}</button></div></div>`;
-    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, showRoute: !isSavedMap || mode !== 'game', previous: !isSavedMap ? expectedMap?.raw : null, onSelect: place => {
+    mapTopologyView = createMapTopologyView(data, { language: currentLanguage(), animations: settings.mapAnimations, trackedFields: settings.trackedFields, showRoute: !isSavedMap || mode !== 'game', previous: !isSavedMap ? trackedMapData(expectedMap?.raw) : null, onSelect: place => {
         if (!isSavedMap || previewOnly || mode !== 'game') return;
         const route = getMapRoute(data, place.id), panel = overlay.querySelector('#bb-map-travel');
         if (!route || route.places.length < 2) { panel.className = ''; panel.replaceChildren(); return; }
@@ -877,7 +1015,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
     const field = (target, key, value, options = null, required = false, label = mapFieldLabel(key)) => {
         const wrapper = document.createElement('label');
         wrapper.textContent = label;
-        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere', 'state_reason', 'source', 'expires_when', 'evidence'].includes(key) ? 'textarea' : 'input');
+        const input = document.createElement(options ? 'select' : ['summary', 'description', 'thought', 'threat_reason', 'atmosphere', 'state_reason', 'source', 'expires_when', 'evidence', 'mention_aliases'].includes(key) ? 'textarea' : 'input');
         if (options) for (const [optionValue, text] of options) {
             const option = document.createElement('option');
             option.value = optionValue;
@@ -892,9 +1030,26 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         target.append(wrapper);
         return input;
     };
+    const aliasFields = (target, entry) => {
+        const details = document.createElement('details'); details.className = 'bb-map-edit-aliases';
+        const summary = document.createElement('summary'); summary.textContent = tr('Варианты упоминания', 'Mention variants');
+        details.append(summary);
+        const input = field(details, 'mention_aliases', (entry?.mention_aliases || []).join('\n'), null, false,
+            tr('По одному на строку. До 16 вариантов, каждый — 2–120 символов.', 'One per line. Up to 16 variants, 2–120 characters each.'));
+        input.rows = 3; input.maxLength = MAX_MENTION_ALIASES * (MAX_MENTION_ALIAS_LENGTH + 1);
+        input.dataset.explicit = String(entry?.mention_aliases !== undefined);
+        input.addEventListener('input', () => { input.dataset.edited = 'true'; });
+        target.append(details);
+    };
+    const readAliases = target => {
+        const input = target.querySelector(':scope > .bb-map-edit-aliases textarea');
+        if (!input || (!input.value.trim() && input.dataset.explicit !== 'true' && input.dataset.edited !== 'true')) return {};
+        const lines = input.value.split(/\r?\n/).filter(line => line.trim());
+        return { mention_aliases: normalizeMentionAliases(lines) };
+    };
     const scene = form.querySelector('.bb-map-edit-fields');
     field(scene, 'schematic_name', data.schematic_name, null, true);
-    field(scene, 'atmosphere', data.atmosphere);
+    if (settings.trackedFields.atmosphere) field(scene, 'atmosphere', data.atmosphere);
     const destinations = data.zones.map((zone, index) => [String(index), graph ? zone.name : `${zone.name} · ${mapPositionLabel(zone.position)}`]);
     if (graph) {
         field(scene, 'scope', data.scope, [['scene', tr('Текущая сцена', 'Current scene')], ['surroundings', tr('Окрестности', 'Surroundings')]]);
@@ -917,7 +1072,10 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             field(block, 'holder', entry?.holder);
             field(block, 'state_reason', entry?.state_reason);
         }
-        if (type === 'character') for (const key of ['mood', 'attitude', 'thought']) field(block, key, entry?.[key]);
+        if (type === 'character') for (const key of ['mood', 'attitude', 'thought']) {
+            if (settings.trackedFields[key]) field(block, key, entry?.[key]);
+        }
+        aliasFields(block, entry);
         const remove = document.createElement('button');
         remove.type = 'button';
         remove.className = 'bb-map-edit-remove';
@@ -958,6 +1116,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         }
         field(body, 'threat_level', zone.threat_level || 'safe', ['safe', 'tension', 'danger'].map(value => [value, mapThreatLabel(value)]));
         field(body, 'threat_reason', zone.threat_reason);
+        aliasFields(body, zone);
         const entities = document.createElement('div');
         entities.className = 'bb-map-edit-entities';
         body.append(entities);
@@ -966,6 +1125,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         const actions = document.createElement('div');
         actions.className = 'bb-map-edit-actions';
         for (const [type, label] of [['object', tr('+ Предмет', '+ Object')], ['character', tr('+ Персонаж', '+ Character')]]) {
+            if (!settings.trackedFields[type === 'object' ? 'objects' : 'characters']) continue;
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'bb-map-btn';
@@ -1069,7 +1229,8 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
                 .map(input => [input.name, input.value]));
             const sections = [...form.querySelectorAll('.bb-map-edit-zone[data-zone-index]')];
             const draft = { ...readFields(scene), object_memory_scope: data.object_memory_scope, zones: sections.map(section => ({
-                ...readFields(section.querySelector('.bb-map-edit-zone-body')), ...(graph ? { id: editorZones[Number(section.dataset.zoneIndex)].id } : { position: data.zones[Number(section.dataset.zoneIndex)].position }), poi: [], characters: [],
+                ...readFields(section.querySelector('.bb-map-edit-zone-body')), ...readAliases(section.querySelector('.bb-map-edit-zone-body')),
+                ...(graph ? { id: editorZones[Number(section.dataset.zoneIndex)].id } : { position: data.zones[Number(section.dataset.zoneIndex)].position }), poi: [], characters: [],
             })) };
             if (graph) {
                 draft.layout = 'graph'; draft.player_place_id ||= null;
@@ -1078,7 +1239,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
             }
             for (const block of form.querySelectorAll('[data-entity-type]')) {
                 const { destination, ...fields } = readFields(block);
-                const entry = { ...block._originalEntry, ...fields };
+                const entry = { ...block._originalEntry, ...fields, ...readAliases(block) };
                 if (block.dataset.entityType === 'object') {
                     if (editObjects) entry.uncertain = false; // The player explicitly reviews manual corrections.
                     if (entry.item_state !== 'unknown') entry.last_known = '';
@@ -1105,7 +1266,7 @@ function showMapEditor(data, isSavedMap, chatForMap, expectedMap) {
         } catch (error) {
             const message = form.querySelector('.bb-map-edit-error');
             message.hidden = false;
-            message.textContent = error.message === 'invalid_effects'
+            message.textContent = error.message === 'invalid_mention_aliases' ? mentionAliasesError() : error.message === 'invalid_effects'
                 ? tr('Для эффекта нужны название, описание, источник, условие окончания и точное имя текущей сцены, зоны или персонажа (включая игрока). Не более 16 эффектов, поля до 1500 символов.', 'Effects need a name, description, source, end condition and exact current scene, zone or character/player name. Up to 16 effects, fields up to 1500 characters.') : error.message === 'invalid_map'
                 ? graph ? tr('Проверьте места и проходы: у каждого прохода нужны разные существующие концы, а подтверждённому или закрытому проходу — основание. Не более 24 мест и 48 проходов.', 'Check places and passages: endpoints must be different existing places; confirmed or blocked passages need evidence. Up to 24 places and 48 passages.') : tr('Проверьте названия и положение. Для предмета у персонажа нужен владелец, для оставленного вне сцены — основание. Состояние «В зоне» требует выбора зоны.', 'Check names and whereabouts. Held objects need a holder; objects left outside the scene need evidence. In the zone requires a selected zone.') : error.message;
             message.scrollIntoView({ block: 'nearest' });
@@ -1131,13 +1292,20 @@ function normalizeGeneratedMapData(response, previousRaw = null) {
 }
 
 async function createMapCandidate(chatForScan, scaleMode, signal, returnEntry = null) {
-    const recentMessages = mapSceneText(chatForScan);
+    const sceneText = mapSceneText(chatForScan);
+    const scanOptions = JSON.stringify([settings.historyMessages, settings.historyTokenLimit, settings.trackedFields]);
     
     const prevData = getMapDataForCurrentChat();
     const archiveRef = chat_metadata.bb_map_archive;
     const archive = readLocationArchive(chat_metadata);
-    const topology = returnEntry ? archivedLocationTopology(returnEntry.snapshot) : prevData?.raw;
+    const topology = trackedMapData(returnEntry ? archivedLocationTopology(returnEntry.snapshot) : prevData?.raw);
     const modeForScan = getMapMode(chat_metadata);
+    const recentMessages = await scanHistoryText(chatForScan, signal);
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (!isSameChat(chatForScan, SillyTavern.getContext()) || mapSceneText(chatForScan) !== sceneText
+        || getMapDataForCurrentChat() !== prevData || chat_metadata.bb_map_archive !== archiveRef
+        || getMapMode(chat_metadata) !== modeForScan
+        || JSON.stringify([settings.historyMessages, settings.historyTokenLimit, settings.trackedFields]) !== scanOptions) return null;
     const scope = ['global', 'surroundings'].includes(scaleMode) ? 'surroundings' : 'scene';
     const scaleInstruction = scope === 'surroundings'
         ? 'Use scope "surroundings": include nearby established rooms, outdoor places and the passages connecting them.'
@@ -1154,23 +1322,35 @@ async function createMapCandidate(chatForScan, scaleMode, signal, returnEntry = 
     const returnInstruction = returnEntry ? `\nThe user selected archived location ${JSON.stringify(returnEntry.name)} for a revisit. Use its historical layout as a starting point only if recent narrative establishes the player is there now. Recheck player position, passage status and all current occupants, objects, threats and effects against recent narrative. The layout alone establishes no current occupants or effects. Return archive_location_id ${JSON.stringify(returnEntry.id)} with a verbatim location_evidence quote if established, otherwise null. Selecting a map is not narrative movement.\n` : '';
     const carriedMemory = returnEntry && modeForScan === 'game' && prevData?.raw
         ? '\nCurrent traveling possessions and character effects:\n' + buildMapContextString({ ...prevData.raw, zones: [], connections: [],
-            schematic_name: 'Traveling possessions', unlocated_objects: getMapObjects(prevData.raw).filter(item => item.item_state === 'held') })
+            schematic_name: 'Traveling possessions', unlocated_objects: settings.trackedFields.objects ? getMapObjects(prevData.raw).filter(item => item.item_state === 'held') : [] })
             + buildMapEffectsContext({ ...prevData.raw, effects: (prevData.raw.effects || []).filter(effect => effect.scope === 'character') }, chatForScan.name1) : '';
+    const mentionMemory = mapMentionAliasMemory(topology);
+    if (returnEntry && modeForScan === 'game' && settings.trackedFields.objects) mentionMemory.push(...mapMentionAliasMemory({
+        zones: [], unlocated_objects: getMapObjects(prevData?.raw).filter(item => item.item_state === 'held'),
+    }));
+    const aliasInstruction = mentionMemory.length ? '\n<mention_alias_memory>\nExisting matching labels only; preserve them for the same entities. '
+        + JSON.stringify(mentionMemory) + '\n</mention_alias_memory>\n' : '';
     const locationRules = '\nLOCATION IDENTITY: Return location_change (same, new, or uncertain) and location_change_evidence. Ordinary updates, renaming, newly discovered places and movement within the mapped scene are same: preserve the active archive ID. Null archive_location_id alone does not establish a new location. Use new only for an established move to a distinct physical scene, quoting that move verbatim in location_change_evidence; use uncertain if the boundary is unclear. Give the scene a meaningful title in the chat language, never copy the example title Location. Event titles alone are not scene changes.\n';
     const prompt = MAP_PROMPT
         .replace('{{lastMessages}}', recentMessages)
         .replace('{{scaleInstruction}}', scaleInstruction + `\nThe player's exact name is ${JSON.stringify(chatForScan.name1 || '')}.` + (modeForScan === 'game'
             ? '\nGAME MODE: Set player_place_id to the player\'s position supported by the latest narrative. A requested movement alone is not a completed transition. Do not invent threats, adjacent zones, or consequences unsupported by the scene; omit unknown zones even at building scale. For every poi add item_state (zone, held, or unknown), holder (exact character name, including the player, only for held), state_reason (brief evidence from the narrative), and uncertain (boolean). Use held only when possession is established; intentions to take or leave an item are not completed actions. Keep the exact names of previously tracked objects. Missing mentions do not establish loss, destruction, or transfer. Mark uncertain true whenever evidence is ambiguous. Objects outside the current scene may be listed in top-level unlocated_objects with the same fields and state held, unknown, or left (with evidence); never invent a zone to hold them.' : ''))
-        .replace('{{previousMap}}', prevMapInstruction + archiveInstruction + locationRules + returnInstruction + carriedMemory);
+        .replace('{{previousMap}}', prevMapInstruction + archiveInstruction + locationRules + returnInstruction + carriedMemory + aliasInstruction);
     const objectScopeRules = modeForScan === 'game'
         ? `\nSCENE OBJECT MEMORY: Surroundings and loose objects belong ONLY to their established scene. Do not move floors, doorframes, branches, buildings, marks, furniture, or left-behind items into a new scene just because they were in the previous map. Never list stale surroundings in unlocated_objects. Preserve established held possessions even when they are not mentioned again, unless the narrative establishes transfer or disposal. The player's exact name is ${JSON.stringify(chatForScan.name1 || '')}. Include other characters' held items only while those characters are present in the current scene. For an item explicitly left or discarded OUTSIDE the current scene, use unlocated_objects with item_state left, state_reason describing the established event, and uncertain true if ambiguous. If a held item's fate becomes uncertain, use unknown and uncertain true; mere omission is not evidence of loss. Do not recreate discarded items as new objects.` : '';
     const effectRules = modeForScan === 'game'
         ? '\nTEMPORARY EFFECTS: Return a top-level effects array (max 16). Each effect has name, scope (scene, zone, or character), target (exact schematic_name, zone name, or character/player name), description (brief circumstance, no numerical penalty), source (established cause), expires_when (concrete narrative end condition), status (active or ended), evidence (supporting narrative event), and uncertain (boolean). Do not invent effects, stats, damage, rolls, timers or player actions. Environmental effects belong to their scene/zone, not a traveling character; bodily or mental states may belong to a character. Retain previously active effects while applicable; omission alone is not an ending. Report ended only when a story event satisfies the end condition, with evidence; mark uncertain true for ambiguous changes. Empty effects means no new reported effects; previous applicable states remain until an established ending. Do not revive ended effects or retain states of departed characters/old zones.' : '';
-    const result = await generateMapFast(prompt + objectScopeRules + effectRules, signal);
+    const disabled = TRACKED_FIELDS.filter(key => !settings.trackedFields[key]);
+    const fieldRules = disabled.length ? '\nTRACKING OVERRIDE: Do not generate or infer these disabled fields: '
+        + disabled.map(key => ({ characters: 'zone characters (return [])', objects: 'zone poi and unlocated_objects (return [])',
+            atmosphere: 'atmosphere (return an empty string)' })[key] || `character ${key} (omit or leave empty)`).join(', ')
+        + '. These exclusions override the earlier format and game instructions. Keep places, passages and player position.\n' : '';
+    const result = await generateMapFast(prompt + objectScopeRules + effectRules + fieldRules, signal);
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
     if (!isSameChat(chatForScan, SillyTavern.getContext()) || getMapDataForCurrentChat() !== prevData
         || getMapMode(chat_metadata) !== modeForScan || chat_metadata.bb_map_archive !== archiveRef
-        || mapSceneText(chatForScan) !== recentMessages) return null;
+        || mapSceneText(chatForScan) !== sceneText
+        || JSON.stringify([settings.historyMessages, settings.historyTokenLimit, settings.trackedFields]) !== scanOptions) return null;
     const response = extractJSON(result);
     const evidence = typeof response.location_evidence === 'string' ? response.location_evidence.trim().slice(0, 1500) : '';
     const hasEvidence = !!evidence && recentMessages.includes(evidence);
@@ -1184,15 +1364,15 @@ async function createMapCandidate(chatForScan, scaleMode, signal, returnEntry = 
     const candidate = normalizeGeneratedMapData(response, returnEntry ? locationNormalizationMemory(topology, prevData?.raw) : prevData?.raw);
     const objects = modeForScan === 'game' || getMapObjects(prevData?.raw).some(item => item.item_state)
         ? reconcileMapObjects(candidate, prevData?.raw, chatForScan.name1) : candidate;
-    const info = { ...location, archiveRef, sceneText: recentMessages, evidence };
+    const info = { ...location, archiveRef, sceneText, evidence };
     if (modeForScan === 'game') {
         const effectMemory = returnEntry && prevData?.raw ? { ...prevData.raw, effects: (prevData.raw.effects || []).filter(effect => effect.scope === 'character') } : prevData?.raw;
-        const updated = reconcileMapEffects(objects, effectMemory, chatForScan.name1);
+        const updated = trackedMapData(reconcileMapEffects(objects, effectMemory, chatForScan.name1));
         candidateLocations.set(updated, info);
         return updated;
     }
     const { effects, ...classic } = objects;
-    const updated = prevData?.raw?.effects ? { ...classic, effects: prevData.raw.effects } : classic;
+    const updated = trackedMapData(prevData?.raw?.effects ? { ...classic, effects: prevData.raw.effects } : classic);
     candidateLocations.set(updated, info);
     return updated;
 }
@@ -1200,7 +1380,7 @@ async function createMapCandidate(chatForScan, scaleMode, signal, returnEntry = 
 function syncMapScanControls() {
     for (const button of document.querySelectorAll('[data-map-scan]')) button.disabled = scanInProgress;
     for (const button of document.querySelectorAll('[data-map-cancel]')) {
-        button.hidden = !scanInProgress;
+        button.hidden = !scanInProgress && autoStatus !== 'waiting';
         button.disabled = !!activeMapScan?.controller.signal.aborted;
     }
 }
@@ -1219,6 +1399,7 @@ function finishMapScan(operation) {
 function cancelMapScan() {
     activeMapScan?.controller.abort();
     clearTimeout(autoScanTimer); autoScanTimer = null;
+    autoWaitSince = null; autoWaitReason = '';
     if (autoStatus === 'scanning' || autoStatus === 'waiting') autoStatus = 'idle';
     syncMapScanControls(); renderMapWidget();
 }
@@ -1405,7 +1586,7 @@ async function triggerMapScan(btnElement, scaleMode = 'scene') {
     } catch (err) {
         if (operation.controller.signal.aborted) { toastr.info(tr('Генерация карты отменена.', 'Map generation cancelled.'), 'BB Map'); return; }
         // @ts-ignore
-        const message = err?.message === 'invalid_effects'
+        const message = err?.message === 'invalid_mention_aliases' ? mentionAliasesError() : err?.message === 'invalid_effects'
             ? tr('Ответ содержит некорректные временные эффекты. Проверьте источник, цель и условие окончания.', 'The response contains invalid temporary effects. Check the source, target and end condition.') : err?.message === 'invalid_map'
             ? tr('Ответ содержит некорректную структуру карты. Попробуйте ещё раз.', 'The response has an invalid map structure. Please try again.')
             : err.message;
@@ -1429,12 +1610,55 @@ function resetAutoUpdate() {
     autoCandidateText = null;
     autoCandidateMode = null;
     autoStatus = 'idle';
+    autoWaitSince = null;
+    autoWaitReason = '';
+}
+
+function resetAutoSchedule() {
+    autoScheduleChat = null;
+    autoReplyCount = 0;
+    handledReplies = new WeakMap();
+}
+
+function autoWaitMessage() {
+    const reasons = {
+        generation: tr('завершения генерации SillyTavern', 'SillyTavern generation to finish'),
+        saving: tr('сохранения чата', 'the chat to finish saving'),
+        scan: tr('завершения другого скана карты', 'another map scan to finish'),
+    };
+    return (autoStatus === 'blocked'
+        ? tr('Ожидание приостановлено: ', 'Waiting paused: ')
+        : tr('Ожидает ', 'Waiting for ')) + (reasons[autoWaitReason] || tr('запуска сканирования', 'the scan to start'))
+        + (autoStatus === 'blocked' ? tr('. Завершите текущую операцию и нажмите «Повторить».', '. Finish the current operation and select Retry.') : '…');
+}
+
+function retryAutoScan() {
+    autoWaitSince = null;
+    queueAutoScan(SillyTavern.getContext());
+}
+
+function scheduleReplyScan(chat, message, type = 'normal') {
+    if (type === 'quiet' || type === 'impersonate' || type === 'first_message' || type === 'extension'
+        || (type === 'continue' && !settings.updateOnContinue)
+        || (['swipe', 'regenerate'].includes(type) && !settings.updateOnRegenerate)) return;
+    if (!autoScheduleChat || !isSameChat(autoScheduleChat, chat)) {
+        resetAutoSchedule(); autoScheduleChat = { ...chat };
+    }
+    const signature = JSON.stringify([message.mes, message.gen_finished]);
+    if (handledReplies.get(message) === signature) return;
+    handledReplies.set(message, signature);
+    // Never leave an old proposal available for automatic saving during the interval.
+    if (autoCandidate) { resetAutoUpdate(); renderMapWidget(); setupExtensionSettings(true); }
+    autoReplyCount++;
+    if (autoReplyCount < settings.autoUpdateInterval) return;
+    autoReplyCount = 0;
+    queueAutoScan(chat);
 }
 
 function canAutoApplyMap(baseMap, candidate, chat) {
     return !candidateLocations.get(candidate)?.needsConfirmation && !candidateLocations.get(candidate)?.needsLocationChoice
-        && !hasLegacyObjectMemory(baseMap?.raw) && !requiresTopologyReview(baseMap?.raw, candidate)
-        && !(getMapMode(chat_metadata) === 'game' && (requiresObjectReview(baseMap?.raw, candidate, chat.name1)
+        && !(settings.trackedFields.objects && hasLegacyObjectMemory(baseMap?.raw)) && !requiresTopologyReview(baseMap?.raw, candidate)
+        && !(getMapMode(chat_metadata) === 'game' && ((settings.trackedFields.objects && requiresObjectReview(baseMap?.raw, candidate, chat.name1))
             || requiresEffectReview(baseMap?.raw, candidate)));
 }
 
@@ -1450,9 +1674,9 @@ function getMapReviewState(baseMap, candidate, chat) {
     if (candidateLocations.get(candidate)?.needsConfirmation) add(`archive:${candidateLocations.get(candidate).locationId}`,
         tr('возврат в архивную локацию требует подтверждения', 'returning to an archived location needs confirmation'));
     if (candidateLocations.get(candidate)?.needsLocationChoice) add('location-boundary', tr('граница локации неясна', 'the location boundary is unclear'));
-    if (hasLegacyObjectMemory(baseMap?.raw)) add('legacy', tr('старая память предметов требует проверки', 'legacy object memory needs review'));
+    if (settings.trackedFields.objects && hasLegacyObjectMemory(baseMap?.raw)) add('legacy', tr('старая память предметов требует проверки', 'legacy object memory needs review'));
     if (getMapMode(chat_metadata) === 'game') {
-        if (requiresObjectReview(baseMap?.raw, candidate, chat.name1)) add('objects', tr('положение предметов требует проверки', 'object whereabouts need review'));
+        if (settings.trackedFields.objects && requiresObjectReview(baseMap?.raw, candidate, chat.name1)) add('objects', tr('положение предметов требует проверки', 'object whereabouts need review'));
         if (requiresEffectReview(baseMap?.raw, candidate)) add('effects', tr('временные эффекты требуют проверки', 'temporary effects need review'));
     }
     return { keys, message: reasons.length ? (settings.autoApply
@@ -1473,6 +1697,7 @@ function notifyMapReview(baseMap, candidate, chat) {
 
 async function setAutoApply(checked) {
     settings.autoApply = checked;
+    if (checked && !settings.autoUpdate) resetAutoSchedule();
     if (checked) settings.autoUpdate = true;
     saveSettingsDebounced();
     if (checked && autoCandidate) {
@@ -1507,6 +1732,7 @@ function queueAutoScan(chatForScan) {
         setupExtensionSettings(true);
     }
     clearTimeout(autoScanTimer);
+    autoWaitSince ??= Date.now();
     if (autoStatus !== 'waiting' && settings.autoUpdate && !autoCandidate
         && isSameChat(chatForScan, SillyTavern.getContext())) {
         autoStatus = 'waiting';
@@ -1516,10 +1742,21 @@ function queueAutoScan(chatForScan) {
         autoScanTimer = null;
         if (!settings.autoUpdate || generationStopped || autoCandidate) return;
         if (!isSameChat(chatForScan, SillyTavern.getContext())) return;
-        if (document.body.dataset.generating || isChatSaving || scanInProgress) {
+        const reason = document.body.dataset.generating ? 'generation' : isChatSaving ? 'saving' : scanInProgress ? 'scan' : '';
+        if (reason) {
+            const changed = autoWaitReason !== reason;
+            autoWaitReason = reason;
+            if (Date.now() - autoWaitSince >= AUTO_WAIT_TIMEOUT) {
+                autoStatus = 'blocked';
+                renderMapWidget(); setupExtensionSettings(true); syncMapScanControls();
+                return;
+            }
+            if (changed) { renderMapWidget(); setupExtensionSettings(true); }
             queueAutoScan(chatForScan);
             return;
         }
+        autoWaitSince = null;
+        autoWaitReason = '';
         const reply = chatForScan.chat?.at(-1);
         const replyText = reply?.mes;
         const baseMap = getMapDataForCurrentChat();
@@ -1566,13 +1803,14 @@ function queueAutoScan(chatForScan) {
     }, 1500);
 }
 
-function handleGenerationStarted(type) {
+function handleGenerationStarted(type, options, dryRun) {
+    if (dryRun) return;
     generationStopped = false;
     pendingReply = null;
     const context = SillyTavern.getContext();
     const last = context.chat?.at(-1);
     generationSnapshot = type === 'quiet' || type === 'impersonate' ? null : {
-        context, last, text: last?.mes, finished: last?.gen_finished,
+        context: { ...context }, last, text: last?.mes, finished: last?.gen_finished, type,
     };
 }
 
@@ -1580,21 +1818,22 @@ function handleMessageReceived(messageId, type) {
     if (!settings.autoUpdate || generationStopped || type === 'first_message' || type === 'extension') return;
     const chatForReply = SillyTavern.getContext();
     const message = chatForReply.chat?.[messageId];
-    if (!message || message.is_user || !message.mes) return;
+    if (!message || message.is_user || message.is_system || !message.mes) return;
     pendingReply = chatForReply;
-    queueAutoScan(chatForReply);
+    scheduleReplyScan(chatForReply, message, type || generationSnapshot?.type || 'normal');
 }
 
 function handleGenerationEnded() {
     if (!pendingReply && settings.autoUpdate && !generationStopped && generationSnapshot
         && isSameChat(generationSnapshot.context, SillyTavern.getContext())) {
         const latest = SillyTavern.getContext().chat?.at(-1);
-        if (latest && !latest.is_user && latest.mes
+        if (latest && !latest.is_user && !latest.is_system && latest.mes
             && (latest !== generationSnapshot.last || latest.mes !== generationSnapshot.text
                 || latest.gen_finished !== generationSnapshot.finished)) {
-            queueAutoScan(generationSnapshot.context);
+            scheduleReplyScan(generationSnapshot.context, latest, generationSnapshot.type);
         }
     }
+    if (pendingReply && autoStatus === 'blocked') retryAutoScan();
     pendingReply = null;
     generationSnapshot = null;
 }
@@ -1711,6 +1950,21 @@ function setupExtensionSettings(rebuild = false) {
         wrap.append(field, caption);
         parent.append(wrap);
     }
+    function number(parent, label, key, min, max, fallback) {
+        const field = input(parent, label, String(settings[key]), 'number', value => {
+            settings[key] = boundedInteger(value, fallback, min, max);
+            field.value = settings[key];
+            changeScanSettings();
+        });
+        field.min = min; field.max = max; field.step = 1;
+        return field;
+    }
+    function changeScanSettings() {
+        activeMapScan?.controller.abort();
+        resetAutoUpdate(); resetAutoSchedule();
+        removeMapOverlay();
+        saveSettingsDebounced(); injectCurrentMapContext(); renderMapWidget();
+    }
     function note(parent, message) {
         const paragraph = document.createElement('p');
         paragraph.className = 'bb-map-settings-note';
@@ -1752,8 +2006,36 @@ function setupExtensionSettings(rebuild = false) {
         saveSettingsDebounced();
         chatMapLinks?.refresh();
     });
-    note(general, tr('Нажмите на подсвеченное упоминание для описания. Распознаются однозначные имя и фамилия персонажа, словоформы и короткие названия распространённых предметов. Неоднозначные упоминания пропускаются.',
-        'Click a highlighted mention for its description. Unique character first and last names, Russian inflections and short names of common objects also match. Ambiguous mentions are skipped.'));
+    note(general, tr('Нажмите на подсвеченное упоминание для описания. Используются сохранённые варианты названий; правка — в редакторе карты. Старые карты сохраняют поиск по именам и словоформам распространённых предметов. Неоднозначные упоминания пропускаются.',
+        'Click a highlighted mention for its description. Saved name variants can be corrected in the map editor. Old maps retain character-name and common-object matching. Ambiguous mentions are skipped.'));
+
+    const palette = group(tr('Цвета карты', 'Map colors'), '◐', 'colors');
+    const colorLabels = { accent: ['Акцент и маршрут', 'Accent and route'], surface: ['Фон', 'Background'],
+        text: ['Текст', 'Text'], safe: ['Безопасно', 'Safe'], tension: ['Напряжение', 'Tension'], danger: ['Опасность', 'Danger'],
+        'mention-character': ['Упоминания персонажей', 'Character mentions'], 'mention-object': ['Упоминания предметов', 'Object mentions'],
+        'mention-zone': ['Упоминания мест', 'Place mentions'] };
+    const colors = document.createElement('div'); colors.className = 'bb-map-color-fields'; palette.append(colors);
+    for (const key of Object.keys(MAP_COLORS)) input(colors, tr(...colorLabels[key]), settings.colors[key], 'color', value => {
+        if (!/^#[\da-f]{6}$/i.test(value)) return;
+        settings.colors[key] = value; applyMapColors(); saveSettingsDebounced();
+    });
+    action(palette, tr('Сбросить цвета', 'Reset colors'), () => {
+        settings.colors = { ...MAP_COLORS }; applyMapColors(); saveSettingsDebounced(); setupExtensionSettings(true);
+    });
+
+    const contextTools = group(tr('Контекст сканирования', 'Scan context'), '≡', 'context');
+    number(contextTools, tr('Последних сообщений', 'Recent messages'), 'historyMessages', 1, 100, 3);
+    number(contextTools, tr('Лимит токенов истории (0 — без лимита)', 'History token limit (0 = unlimited)'), 'historyTokenLimit', 0, 100000, 0);
+    note(contextTools, tr('Сначала исключаются старые сообщения; слишком длинная последняя реплика сокращается с начала. Лимит относится к добавляемой истории, не к инструкциям и прошлой карте. Подсчёт — токенизатором текущего подключения SillyTavern; у другой модели он может отличаться. Основное подключение также может добавлять свой контекст. Лимит ответа остаётся 10 000 токенов.',
+        'Old messages are omitted first; an oversized latest message is shortened from the beginning. The limit covers added history, not instructions or the previous map. Counts use the current SillyTavern connection tokenizer and may differ for another model. The main connection can also add its own context. The response limit stays at 10,000 tokens.'));
+    const tracking = group(tr('Отслеживаемые поля', 'Tracked fields'), '☷', 'tracking');
+    const fieldLabels = { atmosphere: ['Время и погода', 'Time and weather'], characters: ['Персонажи', 'Characters'],
+        objects: ['Предметы', 'Objects'], mood: ['Настроение', 'Mood'], attitude: ['Отношение', 'Attitude'], thought: ['Мысли', 'Thoughts'] };
+    for (const key of TRACKED_FIELDS) checkbox(tracking, tr(...fieldLabels[key]), settings.trackedFields[key], checked => {
+        settings.trackedFields[key] = checked; changeScanSettings();
+    });
+    note(tracking, tr('Выключенные поля исключаются из новых сканов, показа и контекста карты. Сохранённые снимки не перезаписываются при переключении. Места, проходы, положение игрока и угрозы остаются.',
+        'Disabled fields are excluded from new scans, display and map context. Switching does not rewrite saved snapshots. Places, passages, player position and threats remain.'));
 
     // Map management stays in extension settings.
     const mapTools = group(tr('Карта текущего чата', 'Current chat map'), '▦', 'map');
@@ -1797,14 +2079,25 @@ function setupExtensionSettings(rebuild = false) {
         });
     checkbox(mapTools, tr('Готовить обновление после реплики', 'Prepare an update after each reply'), settings.autoUpdate, checked => {
         settings.autoUpdate = checked;
-        if (!checked) resetAutoUpdate();
+        if (!checked) { resetAutoUpdate(); resetAutoSchedule(); }
         saveSettingsDebounced();
         renderMapWidget();
     });
     checkbox(mapTools, tr('Сохранять обновление автоматически', 'Save updates automatically'), settings.autoApply,
         checked => void setAutoApply(checked).catch(() => toastr.error(tr('Не удалось сохранить карту.', 'Could not save the map.'), 'BB Map')));
-    note(mapTools, tr('После ответа персонажа — один запрос к выбранной модели. Без автосохранения обновление ждёт проверки; с автосохранением карта сразу заменяется, а предыдущую можно восстановить.',
-        'After a character reply, one request goes to the selected model. Without automatic saving, the update waits for review; with it, the map is replaced and the previous version can be restored.'));
+    number(mapTools, tr('Обновлять через N ответов персонажей', 'Update every N character responses'), 'autoUpdateInterval', 1, 100, 1);
+    checkbox(mapTools, tr('Учитывать продолжения (Continue)', 'Count continuations (Continue)'), settings.updateOnContinue, checked => {
+        settings.updateOnContinue = checked; changeScanSettings();
+    });
+    checkbox(mapTools, tr('Учитывать перегенерации и свайпы', 'Count regenerations and swipes'), settings.updateOnRegenerate, checked => {
+        settings.updateOnRegenerate = checked; changeScanSettings();
+    });
+    note(mapTools, tr('Считаются завершённые ответы персонажей, включая включённые выше события. Сообщения пользователя, ручное редактирование и повторные события одной реплики не считаются. Без автосохранения результат ждёт проверки. Смена чата или настроек начинает отсчёт заново.',
+        'Completed character responses count, including the enabled events above. User messages, manual edits and duplicate reply events do not count. Without automatic saving, results wait for review. Switching chats or changing settings resets the counter.'));
+    if (autoStatus === 'waiting' || autoStatus === 'blocked') {
+        const status = note(mapTools, autoWaitMessage()); status.setAttribute('role', 'status');
+        if (autoStatus === 'blocked') action(mapTools, tr('Повторить', 'Retry'), retryAutoScan);
+    }
     if (autoCandidate && autoStatus === 'ready' && isSameChat(autoCandidateChat, chatForTools) && savedMap === autoCandidateBase) {
         if (settings.autoApply) {
             const review = getMapReviewState(savedMap, autoCandidate, chatForTools);
@@ -2095,7 +2388,7 @@ function renderMapWidget() {
     if (!settings.showWidget || widgetChat.chatId == null) return;
 
     let raw;
-    try { raw = mapData?.raw ? readMapState(mapData) : null; } catch { return; }
+    try { raw = mapData?.raw ? trackedMapData(readMapState(mapData)) : null; } catch { return; }
     const hasMap = !!raw;
     raw ||= { zones: [], schematic_name: '' };
     const zones = new Map(raw.zones.filter(zone => zone && WIDGET_POSITIONS.includes(zone.position)).map(zone => [zone.position, zone]));
@@ -2139,7 +2432,9 @@ function renderMapWidget() {
             ${settings.autoUpdate && autoStatus !== 'idle' ? `<div class="bb-map-widget-update${reviewMessage ? ' bb-map-review-status' : ''}" role="status">${autoStatus === 'scanning'
                 ? tr('Готовится обновление карты…', 'Preparing a map update…')
                 : autoStatus === 'waiting'
-                    ? tr('Ожидает запуска сканирования…', 'Waiting to start the scan…')
+                    ? escapeHtml(autoWaitMessage())
+                : autoStatus === 'blocked'
+                    ? escapeHtml(autoWaitMessage())
                 : autoStatus === 'ready'
                     ? escapeHtml(reviewMessage || tr('Обновление готово к проверке', 'Update ready for review'))
                     : autoStatus === 'updated'
@@ -2147,9 +2442,12 @@ function renderMapWidget() {
                     : tr('Не удалось подготовить обновление', 'Could not prepare an update')}</div>` : ''}
             ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-review">${tr('Проверить обновление', 'Review update')} ↗</button>` : ''}
             ${autoStatus === 'ready' ? `<button type="button" class="bb-map-widget-discard">${tr('Отклонить обновление', 'Discard update')}</button>` : ''}
+            ${autoStatus === 'blocked' ? `<button type="button" class="bb-map-widget-retry">${tr('Повторить', 'Retry')}</button>` : ''}
             <button type="button" class="bb-map-widget-open">${tr('Открыть карту', 'Open map')} ↗</button>
         </div>`;
     document.body.append(widget);
+    const retry = widget.querySelector('.bb-map-widget-retry');
+    if (retry) retry.onclick = retryAutoScan;
 
     const setPosition = (x, y, save = false) => {
         const width = widget.offsetWidth;
@@ -2258,10 +2556,11 @@ function renderMapWidget() {
 }
 
 jQuery(async () => {
+    applyMapColors();
     try {
         const { eventSource, event_types } = SillyTavern.getContext();
         chatMapLinks = createChatMapLinks({
-            getMap: () => getMapDataForCurrentChat()?.raw,
+            getMap: getMentionMapData,
             isEnabled: () => settings.highlightMentions,
             getLabels: () => ({
                 language: currentLanguage(),
@@ -2302,6 +2601,7 @@ jQuery(async () => {
             mapTravelController?.abort();
             activeMapScan?.controller.abort();
             resetAutoUpdate();
+            resetAutoSchedule();
             removeMapOverlay();
             injectCurrentMapContext();
             renderMapWidget();

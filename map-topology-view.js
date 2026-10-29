@@ -119,7 +119,7 @@ export function layoutMapPassage(p, q, nodes, width) {
         { x: channel, y: q.y }, { x: q.x + Math.sign(channel - q.x) * q.width / 2, y: q.y }];
 }
 
-export function createMapTopologyView(raw, { language = 'ru', animations = true, previous = null, showRoute = true, onSelect = () => {} } = {}) {
+export function createMapTopologyView(raw, { language = 'ru', animations = true, trackedFields = {}, previous = null, showRoute = true, onSelect = () => {} } = {}) {
     const tr = (ru, en) => language === 'ru' ? ru : en;
     const element = document.createElement('section'); element.className = 'bb-topology' + (animations ? '' : ' bb-map-motion-off');
     const field = document.createElement('div'); field.className = 'bb-topology-field';
@@ -285,7 +285,10 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
             : !raw.player_place_id ? tr('Положение игрока неизвестно.', 'The player position is unknown.') : tr('Подтверждённого маршрута нет.', 'No confirmed route.'), detail, 'bb-topology-route');
         const tabs = document.createElement('div'); tabs.className = 'bb-dossier-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', tr('Сведения о зоне', 'Place details'));
         const contents = document.createElement('div'); contents.className = 'bb-topology-contents';
-        const categories = [['characters', tr('Персонажи', 'Characters'), node.characters], ['objects', tr('Предметы', 'Objects'), node.poi], ['passages', tr('Проходы', 'Passages'), adjacent]];
+        const categories = [['characters', tr('Персонажи', 'Characters'), node.characters], ['objects', tr('Предметы', 'Objects'), node.poi], ['passages', tr('Проходы', 'Passages'), adjacent]]
+            .filter(([key]) => trackedFields[key] !== false);
+        if (!categories.some(([key]) => key === detailTab)) detailTab = categories[0][0];
+        tabs.style.gridTemplateColumns = `repeat(${categories.length}, minmax(0, 1fr))`;
         for (const [key, label, entries] of categories) {
             const button = document.createElement('button'); button.type = 'button'; button.id = 'bb-dossier-tab-' + key;
             button.setAttribute('role', 'tab'); button.dataset.focusKey = 'tab-' + key; button.dataset.category = key;
@@ -320,7 +323,8 @@ export function createMapTopologyView(raw, { language = 'ru', animations = true,
             button.onkeydown = event => {
                 const index = ['ArrowRight','ArrowLeft','Home','End'].includes(event.key) ? [...tabs.children].indexOf(button) : -1;
                 if (index < 0) return;
-                event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? 2 : (index + (event.key === 'ArrowRight' ? 1 : 2)) % 3;
+                event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? categories.length - 1
+                    : (index + (event.key === 'ArrowRight' ? 1 : categories.length - 1)) % categories.length;
                 tabs.children[next].click(); tabs.children[next].focus();
             };
         }

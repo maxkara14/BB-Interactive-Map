@@ -58,7 +58,7 @@ const setup = source.slice(0, source.indexOf('jQuery(async () => {')).replace(/^
         }
         await page.locator('#bb-map-edit-btn').click();
         await page.locator('.bb-map-edit-fields [name="schematic_name"]').fill('Исправленное поместье');
-        await page.locator('.bb-map-edit-zone').nth(1).locator('summary').click();
+        await page.locator('.bb-map-edit-zone').nth(1).locator(':scope > summary').click();
         const mira = page.locator('[data-entity-type="character"]');
         await mira.locator('[name="destination"]').selectOption('0');
         await page.locator('[data-entity-type="object"] .bb-map-edit-remove').click();
@@ -78,6 +78,8 @@ const setup = source.slice(0, source.indexOf('jQuery(async () => {')).replace(/^
         assert.equal(saved.saves, 1);
         assert.equal(saved.raw.schematic_name, 'Исправленное поместье');
         assert.equal(saved.raw.zones[0].characters[0].name, 'Мира');
+        assert.equal(saved.raw.zones[0].characters[0].mention_aliases, undefined);
+        assert.equal(saved.raw.zones[0].poi[0].mention_aliases, undefined);
         assert.equal(saved.raw.zones[1].poi.length, 0);
         assert.equal(saved.previous.schematic_name, 'Поместье');
 

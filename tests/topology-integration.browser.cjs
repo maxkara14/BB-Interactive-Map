@@ -119,7 +119,7 @@ const strip = text => text.replace(/^import .*;\r?\n/gm, '').replace(/^export /g
         await page.locator('#bb-map-save-btn').click();
         assert.equal(await page.evaluate(() => chat_metadata.bb_map_data.raw.connections.length), 3);
         await page.locator('#bb-map-edit-btn').click();
-        await page.locator('[data-zone-index]').last().locator('summary').click();
+        await page.locator('[data-zone-index]').last().locator(':scope > summary').click();
         await page.locator('[data-zone-index]').last().locator('button', { hasText: 'Убрать место' }).click();
         await page.getByRole('button', { name: 'ПРОВЕРИТЬ ПРАВКИ', exact: true }).click();
         assert.equal(await page.locator('.bb-map-edit-error').isVisible(), true); // Dangling passage is not silently reassigned.

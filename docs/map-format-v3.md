@@ -85,6 +85,34 @@ Unsupported saved versions fail validation.
   Zone-scoped effects still target the exact place name. Possession and effect
   reconciliation operate on the existing `zones` collection.
 
+## Optional mention metadata
+
+Places, objects (including `unlocated_objects`) and characters can contain
+`mention_aliases`, an optional array of at most 16 strings, each 2–120 UTF-16 code
+units after trimming and whitespace normalization. Empty strings and duplicate
+case-insensitive labels are removed, including the canonical name. HTML angle
+brackets and control characters are rejected with `invalid_mention_aliases`.
+Regex metacharacters are accepted as literal text and escaped when indexed.
+
+This additive field does not change the v3 envelope or require a migration.
+Absent metadata keeps legacy name/dictionary matching; an explicit `[]` requests
+canonical-name matching only. Aliases share the canonical entity's one-per-message
+slot; collisions with another entity's name or alias are excluded. Connections
+are not indexed. Alias metadata alone does not create visible map-change facts.
+
+Normalization retains an omitted list only when entity identity is unambiguous
+and its canonical name is unchanged. Explicit lists replace prior values; a
+rename without an explicit list does not inherit old aliases. Carried possessions,
+JSON persistence, archives and rollback retain their lists. Reading saved maps
+validates into a separate view and never writes metadata.
+
+The same scan request asks for variants and can include existing lists in the
+scan-only `mention_alias_memory` section. Ordinary story context from
+`buildMapContextString`, the macro and the read-only API exclude these lists.
+They remain hidden in regular cards and the map; each editor record has a closed
+Mention variants disclosure. Structural validation does not establish grammatical
+or semantic correctness of model-provided labels.
+
 ## Routes and context
 
 `getMapRoute(raw, destinationId)` returns `{ places: [ids], connections: [ids] }`

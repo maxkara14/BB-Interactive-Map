@@ -1,5 +1,33 @@
 export const MAP_DATA_VERSION = 2;
 export const GRAPH_MAP_DATA_VERSION = 3;
+export const MAX_MENTION_ALIASES = 16;
+export const MAX_MENTION_ALIAS_LENGTH = 120;
+
+// Optional matching metadata. Missing means legacy matching; [] deliberately means full name only.
+export function normalizeMentionAliases(value, name = '') {
+    if (!Array.isArray(value) || value.length > MAX_MENTION_ALIASES) throw new Error('invalid_mention_aliases');
+    const key = text => text.replace(/[\s\u3164\uFFA0\u2800\u200B]+/gu, ' ').trim().toLowerCase();
+    const seen = new Set([key(name)]), result = [];
+    for (const item of value) {
+        if (typeof item !== 'string' || /[<>\u0000-\u001F\u007F]/u.test(item)) throw new Error('invalid_mention_aliases');
+        const alias = item.replace(/[\s\u3164\uFFA0\u2800\u200B]+/gu, ' ').trim();
+        if (!alias) continue;
+        if (alias.length < 2 || alias.length > MAX_MENTION_ALIAS_LENGTH) throw new Error('invalid_mention_aliases');
+        const identity = key(alias);
+        if (!seen.has(identity)) { seen.add(identity); result.push(alias); }
+    }
+    return result;
+}
+
+function mentionAliasFields(source) {
+    return source?.mention_aliases === undefined ? {}
+        : { mention_aliases: normalizeMentionAliases(source.mention_aliases, poiName(source)) };
+}
+
+function inheritMentionAliases(next, previous) {
+    if (next.mention_aliases === undefined && previous?.mention_aliases !== undefined
+        && holderKey(next.name) === holderKey(previous.name)) Object.assign(next, mentionAliasFields(previous));
+}
 
 // Location snapshots are separate from the active map and its one-step undo.
 // Reading old chats never creates or rewrites an archive.
@@ -179,7 +207,7 @@ export function reconcileMapObjects(next, previous = null, playerName = '') {
         if (currentNames.has(entityKey('object', item.name))) continue;
         if (item.item_state !== 'held' || !presentHolders.has(holderKey(item.holder))) continue;
         unlocated.push({ id: item.id, name: item.name, description: optionalText(item.description),
-            ...objectState(item) });
+            ...objectState(item), ...mentionAliasFields(item) });
     }
     return { ...next, zones, unlocated_objects: unlocated,
         object_memory_scope: 'scene' };
@@ -350,6 +378,7 @@ function normalizeMapState(input, previousRaw, graph) {
         const zone = {
             ...(graph ? { id: source.id, kind: source.kind, uncertain: source.uncertain === true } : { position: source.position }),
             name: requiredText(source.name),
+            ...mentionAliasFields(source),
             summary: optionalText(source.summary),
             threat_level: threat,
             threat_reason: optionalText(source.threat_reason),
@@ -357,6 +386,7 @@ function normalizeMapState(input, previousRaw, graph) {
                 name: requiredText(poiName(item)),
                 description: typeof item === 'object' ? optionalText(item?.description) : '',
                 ...objectState(item),
+                ...mentionAliasFields(item),
             })),
             characters: (Array.isArray(source.characters) ? source.characters : []).map(char => ({
                 name: requiredText(char?.name),
@@ -364,6 +394,7 @@ function normalizeMapState(input, previousRaw, graph) {
                 mood: optionalText(char?.mood),
                 attitude: optionalText(char?.attitude),
                 thought: optionalText(char?.thought),
+                ...mentionAliasFields(char),
             })),
         };
         if (graph && [zone.name, zone.summary, zone.threat_reason].some(text => text.length > 1500)) throw new Error('invalid_map');
@@ -380,6 +411,8 @@ function normalizeMapState(input, previousRaw, graph) {
         existing.threat_reason = [existing.threat_reason, zone.threat_reason].filter(Boolean).join(' | ');
         existing.poi.push(...zone.poi);
         existing.characters.push(...zone.characters);
+        if (existing.mention_aliases || zone.mention_aliases) existing.mention_aliases = normalizeMentionAliases(
+            [...new Set([...(existing.mention_aliases || []), ...(zone.mention_aliases || [])])].slice(0, MAX_MENTION_ALIASES), existing.name);
     }
     if (!zonesByPosition.size) throw new Error('invalid_map');
 
@@ -389,7 +422,7 @@ function normalizeMapState(input, previousRaw, graph) {
     const unlocated = (input.unlocated_objects || []).map(item => {
         const state = objectState(item);
         if (!state.item_state || state.item_state === 'zone') throw new Error('invalid_map');
-        return { name: requiredText(item.name), description: optionalText(item.description), ...state };
+        return { name: requiredText(item.name), description: optionalText(item.description), ...state, ...mentionAliasFields(item) };
     });
     const counts = new Map();
     const entityZones = [...zones, { poi: unlocated, characters: [] }];
@@ -402,6 +435,12 @@ function normalizeMapState(input, previousRaw, graph) {
         }
     }
     const previous = previousEntityIds(previousRaw);
+    const oldEntities = new Map();
+    for (const zone of [...(previousRaw?.zones || []), { poi: previousRaw?.unlocated_objects || [], characters: [] }]) {
+        for (const [type, entries] of [['character', zone.characters], ['object', zone.poi]]) {
+            for (const entry of entries || []) if (entry?.id) oldEntities.set(`${type}:${entry.id}`, entry);
+        }
+    }
     const used = new Set();
     for (const zone of entityZones) {
         for (const [type, entries] of [['character', zone.characters], ['object', zone.poi]]) {
@@ -411,11 +450,16 @@ function normalizeMapState(input, previousRaw, graph) {
                 const reuse = counts.get(key) === 1 && ids.length === 1 && !used.has(ids[0]);
                 entry.id = reuse ? ids[0] : `bbm-${previous.nextId++}`;
                 used.add(entry.id);
+                if (reuse) inheritMentionAliases(entry, oldEntities.get(`${type}:${entry.id}`));
             }
         }
     }
     if (graph && [requiredText(input.schematic_name), optionalText(input.atmosphere)].some(text => text.length > 1500)) throw new Error('invalid_map');
     const topology = graph ? normalizeTopology(input, zones, previousRaw) : {};
+    for (const zone of zones) {
+        const old = previousRaw?.zones?.find(place => graph ? place.id === zone.id : place.position === zone.position);
+        inheritMentionAliases(zone, old);
+    }
     return {
         schematic_name: requiredText(input.schematic_name),
         atmosphere: optionalText(input.atmosphere),
@@ -521,11 +565,15 @@ export function buildMapContextString(mapData) {
     if (!mapData || !Array.isArray(mapData.zones)) return '';
     const graph = mapData.layout === 'graph';
     const location = graph ? mapData.zones.find(zone => zone.id === mapData.player_place_id)?.name : mapData.schematic_name;
-    let context = graph ? `[Map context: Scene "${mapData.schematic_name}". Scope: ${mapData.scope}. Player position: ${location ? JSON.stringify(location) : 'unknown'}. Atmosphere: ${mapData.atmosphere}. `
-        : `[Map context: The player is at "${mapData.schematic_name}". Atmosphere: ${mapData.atmosphere}. `;
+    const atmosphere = mapData.atmosphere ? `Atmosphere: ${mapData.atmosphere}. ` : '';
+    let context = graph ? `[Map context: Scene "${mapData.schematic_name}". Scope: ${mapData.scope}. Player position: ${location ? JSON.stringify(location) : 'unknown'}. ${atmosphere}`
+        : `[Map context: The player is at "${mapData.schematic_name}". ${atmosphere}`;
     for (const zone of mapData.zones) {
         const characters = Array.isArray(zone.characters) && zone.characters.length
-            ? ` Characters: ${zone.characters.map(c => `${c.name} (${c.mood || ''}, attitude: ${c.attitude || ''})`).join(', ')}.` : '';
+            ? ` Characters: ${zone.characters.map(c => {
+                const details = [c.mood, c.attitude ? `attitude: ${c.attitude}` : ''].filter(Boolean);
+                return c.name + (details.length ? ` (${details.join(', ')})` : '');
+            }).join(', ')}.` : '';
         const objects = Array.isArray(zone.poi) && zone.poi.length
             ? ` Objects: ${zone.poi.map(item => `${poiName(item)}${item.item_state === 'held' ? ` (held by ${item.holder})`
                 : item.item_state === 'unknown' ? ' (whereabouts unknown)' : ''}`).join(', ')}.` : '';

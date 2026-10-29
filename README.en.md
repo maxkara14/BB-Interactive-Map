@@ -4,7 +4,7 @@
 
 A **SillyTavern** extension that turns story events into a map of places and passages. Track your position, characters, objects and scene conditions, and give the model spatial memory of the current chat.
 
-**Version 2.0.2**
+**Version 2.0.3**
 
 ![BB Interactive Map — actual interface overview](docs/images/overview.en.png)
 
@@ -57,16 +57,24 @@ Drag the widget header to move it; its focused header also accepts arrow keys. P
 
 ## Automatic updates
 
-Enable **Prepare update after reply**. A completed character reply or reroll triggers one map request. Existing memory remains in use while the proposal is prepared.
+Enable **Prepare an update after each reply**. By default, a completed character response, continuation or reroll triggers one map request. **Update every N character responses** sets the interval; separate switches exclude continuations and regenerations/swipes from the count. User messages, manual edits and duplicate reply events do not count. Switching chats, disabling updates or changing scan settings resets the counter. Existing memory remains in use while the proposal is prepared.
 
 - By default, the proposal waits for review and saving.
 - **Save updates automatically** enables updates after replies and applies suitable updates immediately, including an existing proposal, keeping the previous map for rollback. The first map can be created automatically after a character reply without a prior manual save.
-- Uncertain position, places, passages, possession or effects may require review. An unresolved proposal pauses repeat requests for the same reply. A new or edited reply replaces the stale proposal with a fresh scan.
+- Uncertain position, places, passages, possession or effects may require review. Duplicate events for the same reply never trigger a new request. The next eligible response removes a stale proposal; a fresh scan follows the configured interval.
 - Manual map scans always open a preview for confirmation, even with automatic saving enabled.
 - In the full map, **Needs review** before the update button lets you confirm an individual place or passage availability. Clicks change only the preview; apply the result with **Save map**. Confirming passage availability allows routing through it. Archive snapshots cannot be edited.
 - When automatic saving pauses, the widget and settings show why; identical popup warnings do not repeat on subsequent replies. New uncertain places or passages need manual review. **Save with uncertainty** accepts the snapshot while retaining dashed lines and uncertainty markers. Once accepted, unchanged uncertainties no longer pause automatic saving; unknown player position and archive returns still require review.
 
 Cancelled responses are discarded. Changing chats prevents a late result from replacing another chat's map. Updates use a separate request and do not create a character reply.
+
+When a scan waits for SillyTavern generation, chat saving or another map scan, the widget and settings show the reason. Waiting pauses after two minutes. Finish the current operation and select **Retry**; the extension never clears another operation's busy state or forces a concurrent request. A waiting scan can also be cancelled.
+
+## Context, fields and colors
+
+- **Scan context:** 1–100 recent messages, default 3. **History token limit** bounds the added history text; `0` disables the limit. Older messages are omitted first, retaining the end of an oversized latest message if necessary. Counts use the current SillyTavern connection tokenizer and may differ for a profile or Custom API model. Instructions, previous map and archive are not truncated; the main connection can also include additional SillyTavern context. This is not a limit on the entire request. The **response** allowance stays at 10,000 tokens.
+- **Tracked fields:** independently enable atmosphere, characters, objects, mood, attitude and thoughts. Disabled fields are excluded from new scans, rendering, mention cards and map context, including the macro and integrations. Switching does not rewrite snapshots: old data becomes visible again when enabled, until a newly saved scan replaces it. Places, passages, player position and threats remain; Game mode controls temporary effects.
+- **Map colors:** accent/route, background, primary text, three threat levels, and independent character, object and place mention colors. Mention colors apply to highlights in messages and type labels in cards. Changes apply immediately; **Reset colors** restores the original appearance. These settings apply across chats.
 
 ## Location archive
 
@@ -107,9 +115,13 @@ The result is appended to your draft without sending it. Use Enhance's cancel co
 
 Enable **Highlight map mentions in chat** under **Interface**. Each entity is highlighted once per message: full name, unique first name and surname share one allowance. Supported honorifics and visual spacing such as `ㅤ` do not create duplicates.
 
-Common objects support Russian inflections and unambiguous short names: «Медный ключ» also matches «медным ключом» or «ключа». If the map contains multiple keys, the short mention is skipped. All forms of one object share one highlight. Unknown and complex labels still require their full name.
+New scans ask the model for **mention variants** for places, characters and objects in the same request. For example, «Раздвижные сёдзи» can match «сёдзи», and «Ступени крыльца» can match «ступени». Variants are stored with each entity in the current chat's map data and included in archive snapshots. A variant shared by multiple entities is skipped; all variants of one entity share one highlight.
 
-Matching is local and does not rewrite messages or request the model. Ambiguous mentions, hidden blocks, code, links and inputs are skipped. Character name inflections, arbitrary nicknames, transliterations and names split across HTML elements are not matched.
+Lists are hidden from the map and regular cards and excluded from story memory, the macro and integration context. To correct them, open **Edit map → Mention variants** for a place, character or object; the disclosure is closed by default. Enter one variant per line, up to 16, each 2–120 characters; HTML and control characters are rejected. Preview edits and save the map. Clearing an existing list leaves only full-name matching.
+
+If a later scan omits the list for the same uniquely identified entity with an unchanged name, saved variants are retained; an explicit list replaces them. Old maps without the field retain full-name matching, unique character names/surnames and inflections for supported common objects. Reading never rewrites maps. New variants require a newly saved scan or manual editing.
+
+Matching is local and does not rewrite messages or request the model. Ambiguous mentions, hidden blocks, code, links and inputs are skipped. Variant quality depends on the model: format is validated, but grammatical and semantic accuracy is not guaranteed. Arbitrary paraphrases without a stored variant and names split across HTML elements are not matched. Connection names from the Passages tab are not indexed yet.
 
 ## Context and integrations
 

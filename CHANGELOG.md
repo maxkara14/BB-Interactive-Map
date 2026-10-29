@@ -4,6 +4,16 @@
 
 ## Русский
 
+### 2.0.3 — 29 октября 2026
+
+- **Глубина истории:** выбор от 1 до 100 последних сообщений для скана, по умолчанию 3.
+- **Частота обновлений:** скан через заданное число ответов персонажей; Continue и перегенерации/свайпы можно исключить отдельными переключателями. Сообщения пользователя, ручные правки и повторные события одной реплики не расходуют интервал.
+- **Бюджет входной истории:** настраиваемый лимит токенов добавляемых сообщений. Старые сообщения исключаются первыми; слишком длинная последняя реплика сокращается с начала. Это не предел полного запроса: инструкции, прежняя карта и дополнительный контекст подключения остаются. Лимит ответа сохранён на уровне 10 000 токенов.
+- **Выбор полей:** отдельное включение атмосферы, персонажей, предметов, настроения, отношения и мыслей для новых сканов, показа и контекста карты. Переключение не перезаписывает сохранённые снимки.
+- **Настройка цветов:** акцент, фон, основной текст, уровни угроз и отдельные цвета подсветки персонажей, предметов и мест. Цвета упоминаний также применяются к подписям типов в карточках; доступен сброс палитры.
+- **Понятное ожидание автоскана:** виджет и настройки показывают занятую операцию. Через две минуты ожидание приостанавливается с действием «Повторить»; ожидающий скан можно отменить без сброса состояния SillyTavern.
+- **Варианты упоминаний:** модель подготавливает короткие названия и словоформы в том же скане; они сохраняются вместе с местами, персонажами и предметами в карте и архиве. Неоднозначные варианты пропускаются. Списки скрыты в обычном интерфейсе и доступны в сворачиваемом блоке редактора; в контекст продолжения сюжета не передаются. Старые карты сохраняют прежнее распознавание без перезаписи при чтении.
+
 ### 2.0.2 — 8 октября 2026
 
 - На телефоне кнопка «Отменить правки» в редакторе занимает полную ширину, как «Проверить правки».
@@ -80,6 +90,16 @@
 Сканирование последних сообщений, сетка 3×3, масштабы «Комната / Здание», персонажи и объекты, обозначения угроз, сохранение памяти текущего чата, автоматическая вставка или `{{bb_map}}`, основное подключение и OpenAI-compatible Custom API.
 
 ## English
+
+### 2.0.3 — October 29, 2026
+
+- **History depth:** choose 1–100 recent messages for each scan, default 3.
+- **Update frequency:** scan after a chosen number of character responses, with separate switches to exclude Continue and regenerations/swipes. User messages, manual edits and duplicate reply events do not count toward the interval.
+- **Input history budget:** set a token limit for added chat messages. Older messages are omitted first; an oversized latest message is shortened from the beginning. This is not a limit on the entire request: instructions, the previous map and additional connection context remain. The response allowance stays at 10,000 tokens.
+- **Field selection:** independently enable atmosphere, characters, objects, mood, attitude and thoughts for new scans, display and map context. Switching does not rewrite saved snapshots.
+- **Color customization:** accent, background, primary text, threat levels and independent character, object and place highlight colors. Mention colors also apply to type labels in cards; palette reset is available.
+- **Clearer automatic scan waiting:** the widget and settings identify the busy operation. Waiting pauses after two minutes with Retry; waiting scans can be cancelled without clearing SillyTavern's busy state.
+- **Mention variants:** the model prepares short names and grammatical forms in the same scan, stored with places, characters and objects in map data and archives. Ambiguous variants are skipped. Lists stay hidden from regular views, can be edited in a collapsed disclosure and are excluded from story-generation context. Old maps retain legacy matching without being rewritten on read.
 
 ### 2.0.2 — October 8, 2026
 

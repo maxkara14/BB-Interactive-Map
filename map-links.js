@@ -1,4 +1,4 @@
-import { poiName } from './map-state.js';
+import { poiName, normalizeMentionAliases } from './map-state.js';
 import { objectMentionAliases, objectMentionBlockers } from './map-object-mentions.js';
 
 const MARKER = 'data-bb-map-mention';
@@ -17,25 +17,37 @@ export function createMapMentionIndex(raw) {
         const values = groups.get(key) || [];
         if (!values.includes(entry)) groups.set(key, [...values, entry]);
     };
-    const addObject = entry => {
+    const addAliases = (entry, source) => {
+        if (source?.mention_aliases === undefined) return false;
+        // Raw integration callers may bypass saved-map validation; malformed aliases never become patterns.
+        try { for (const alias of normalizeMentionAliases(source.mention_aliases, entry.name)) add(entry, alias); }
+        catch { /* Keep the canonical name available. */ }
+        return true;
+    };
+    const addObject = (entry, source = entry) => {
         if (!entry.name) return;
         add(entry);
+        if (addAliases(entry, source)) return;
         for (const alias of objectMentionAliases(entry.name)) add(entry, alias);
         for (const blocker of objectMentionBlockers(entry.name)) groups.set(blocker, [...(groups.get(blocker) || []), null]);
     };
     for (const zone of Array.isArray(raw?.zones) ? raw.zones : []) {
         if (!zone || typeof zone !== 'object') continue;
         const location = { zone: zone.name || '', position: zone.position, placeId: raw.layout === 'graph' ? zone.id : undefined };
-        if (typeof zone.name === 'string') add({ type: 'zone', name: zone.name.trim(), description: zone.summary || '',
-            threat: zone.threat_level || 'safe', reason: zone.threat_reason || '', ...location });
+        if (typeof zone.name === 'string') {
+            const entry = { type: 'zone', name: zone.name.trim(), description: zone.summary || '',
+                threat: zone.threat_level || 'safe', reason: zone.threat_reason || '', ...location };
+            add(entry); addAliases(entry, zone);
+        }
         for (const value of Array.isArray(zone.poi) ? zone.poi : []) {
             addObject({ type: 'object', name: poiName(value), description: value?.description || '',
-                item_state: value?.item_state, holder: value?.holder || '', last_known: value?.last_known || '', ...location });
+                item_state: value?.item_state, holder: value?.holder || '', last_known: value?.last_known || '', ...location }, value);
         }
         for (const value of Array.isArray(zone.characters) ? zone.characters : []) {
             const entry = { type: 'character', name: poiName(value), description: value?.description || '',
                 mood: value?.mood || '', attitude: value?.attitude || '', ...location };
             add(entry);
+            if (addAliases(entry, value)) continue;
             const parts = entry.name.split(new RegExp(`${separators}+`, 'u'));
             // Descriptions such as "Две спорящие ученицы" are not personal names.
             if (parts.length > 1 && parts.every(part => /^\p{Lu}[\p{L}\p{M}-]+$/u.test(part))) {

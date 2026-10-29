@@ -130,7 +130,7 @@ async function autoSaveFixture({ saved = true, uncertain = false, mode = 'classi
             accept: () => { saveCurrentMap(autoCandidate, autoCandidateBase); resetAutoUpdate(); },
             state: () => ({ candidate: autoCandidate, status: autoStatus }) };
     `, context);
-    return { context, metadata, chat, api: context.api, flush: async () => {
+    return { context, metadata, chat, api: context.api, timers, flush: async () => {
         const entry = timers.entries().next().value;
         assert.ok(entry, 'expected an automatic scan');
         timers.delete(entry[0]);
@@ -226,6 +226,18 @@ test('enabling automatic saving preserves ambiguous updates for manual review', 
     assert.equal(context.saves, 0);
 });
 
+test('mention metadata alone saves automatically without introducing a fact review or another request', async () => {
+    const { context, metadata, api, flush } = await autoSaveFixture();
+    context.raw.zones[0].mention_aliases = ['hallway'];
+    api.settings.autoApply = true;
+    api.handleMessageReceived(0, 'normal'); await flush();
+    assert.equal(api.state().status, 'updated');
+    assert.equal(context.requests, 1);
+    assert.equal(context.saves, 1);
+    assert.deepEqual(Array.from(metadata.bb_map_data.raw.zones[0].mention_aliases), ['hallway']);
+    assert.equal(metadata.bb_map_data.previous.raw.zones[0].mention_aliases, undefined);
+});
+
 test('a new reply or reroll replaces a stale proposal and resumes automatic saving in a new location', async () => {
     for (const change of ['reply', 'reroll']) {
         const { context, metadata, chat, api, flush } = await autoSaveFixture({ uncertain: true });
@@ -250,11 +262,12 @@ test('a new reply or reroll replaces a stale proposal and resumes automatic savi
 });
 
 test('duplicate events for the same reply preserve its unresolved proposal without a new request', async () => {
-    const { context, metadata, api, flush } = await autoSaveFixture({ uncertain: true });
+    const { context, metadata, api, flush, timers } = await autoSaveFixture({ uncertain: true });
     api.settings.autoApply = true;
     api.handleMessageReceived(0, 'normal'); await flush();
     const pending = api.state().candidate, saved = metadata.bb_map_data;
-    api.handleMessageReceived(0, 'normal'); await flush();
+    api.handleMessageReceived(0, 'normal');
+    assert.equal(timers.size, 0);
     assert.equal(context.requests, 1);
     assert.equal(context.saves, 0);
     assert.equal(api.state().candidate, pending);

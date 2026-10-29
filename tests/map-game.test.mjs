@@ -55,6 +55,7 @@ test('game scanning requires narrative support and discards results after a mode
         return new Promise(resolve => { finish = resolve; });
     };
     const scanning = api.createMapCandidate(chat, 'global');
+    await Promise.resolve(); // History token budgeting is asynchronous.
     assert.match(prompt, /A requested movement alone is not a completed transition/);
     assert.doesNotMatch(prompt, /Invent logical surrounding locations/);
     metadata.bb_map_mode = 'classic';
